@@ -1,0 +1,15 @@
+vendor
+tmp
+
+.env
+id_ecdsa
+id_ecdsa.pub
+id_ed25519
+id_ed25519.pub
+id_rsa
+id_rsa.pub
+secret.txt
+
+.env.example
+env.sh
+fly.toml
