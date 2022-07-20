@@ -99,7 +99,7 @@ async function postInbox(req: string, data: any, headers: any) {
 async function signHeaders(res: any, strName: string, strHost: string, strInbox: string) {
   const strTime = new Date().toUTCString();
   const s = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(res)));
-  const s256 = btoa(Array.from(new Uint8Array(s), (b) => b.toString(16).padStart(2, "0")).join(""));
+  const s256 = btoa(arrayBufferToString(s));
   const sig = await crypto.subtle.sign(
     "RSASSA-PKCS1-v1_5",
     PRIVATE_KEY,
