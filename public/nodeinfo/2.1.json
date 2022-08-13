@@ -1,0 +1,25 @@
+{
+  "version": "2.1",
+  "software": {
+    "name": "matchbox",
+    "version": "0.2.0",
+    "repository": "https://gitlab.com/acefed/matchbox",
+    "homepage": "https://gitlab.com/acefed/matchbox"
+  },
+  "protocols": ["activitypub"],
+  "services": {
+    "inbound": [],
+    "outbound": []
+  },
+  "usage": {
+    "users": {
+      "total": 0,
+      "activeHalfyear": 0,
+      "activeMonth": 0
+    },
+    "localPosts": 0,
+    "localComments": 0
+  },
+  "openRegistrations": false,
+  "metadata": {}
+}

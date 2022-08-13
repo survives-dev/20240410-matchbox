@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /nodeinfo/
+Allow: /static/
+Allow: /u/
+Disallow: /s/

@@ -1,11 +1,23 @@
-import { crypto } from "https://deno.land/std@0.148.0/crypto/mod.ts";
-import "https://deno.land/std@0.148.0/dotenv/load.ts";
-import { serve } from "https://deno.land/std@0.148.0/http/server.ts";
-import { Hono } from "https://deno.land/x/hono@v2.0.2/mod.ts";
-import { serveStatic } from "https://deno.land/x/hono@v2.0.2/middleware.ts";
+import { crypto } from "https://deno.land/std@0.152.0/crypto/mod.ts";
+import "https://deno.land/std@0.152.0/dotenv/load.ts";
+import { serve } from "https://deno.land/std@0.152.0/http/server.ts";
+import { Hono } from "https://deno.land/x/hono@v2.0.8/mod.ts";
+import { basicAuth, serveStatic } from "https://deno.land/x/hono@v2.0.8/middleware.ts";
 
 const app = new Hono();
-app.use("/public/*", serveStatic());
+app.use("/public/*", serveStatic({ root: "./public/" }));
+app.use("/nodeinfo/*", serveStatic({ root: "./public/" }));
+app.use("/favicon.ico", serveStatic({ path: "./public/favicon.ico" }));
+app.use("/robots.txt", serveStatic({ path: "./public/robots.txt" }));
+if (Deno.env.get("ENABLE_BASIC_AUTH")) {
+  app.use(
+    "/s/*",
+    basicAuth({
+      username: String(Deno.env.get("BASIC_AUTH_USERNAME")),
+      password: String(Deno.env.get("BASIC_AUTH_PASSWORD")),
+    }),
+  );
+}
 app.onError((_err, c) => c.body(null, 500));
 
 const CONFIG = { preferredUsername: "a", name: "Alice" };
@@ -13,11 +25,11 @@ const PRIVATE_KEY = await readPrivateKey(String(Deno.env.get("PRIVATE_KEY")));
 const PUBLIC_KEY = await privateKeyToPublicKey(PRIVATE_KEY);
 const PUBLIC_KEY_PEM = await writePublicKey(PUBLIC_KEY);
 
-function stringToArrayBuffer(s: string) {
+function stob(s: string) {
   return Uint8Array.from(s, (c) => c.charCodeAt(0));
 }
 
-function arrayBufferToString(b: ArrayBuffer) {
+function btos(b: ArrayBuffer) {
   return String.fromCharCode(...new Uint8Array(b));
 }
 
@@ -29,7 +41,7 @@ async function readPrivateKey(pem: string) {
   pem = pem.split("\\n").join("");
   pem = pem.split("\n").join("");
   const pemContents = pem.substring(pemHeader.length, pem.length - pemFooter.length);
-  const der = stringToArrayBuffer(atob(pemContents));
+  const der = stob(atob(pemContents));
   const r = await crypto.subtle.importKey(
     "pkcs8",
     der,
@@ -68,7 +80,7 @@ async function privateKeyToPublicKey(key: CryptoKey) {
 
 async function writePublicKey(key: CryptoKey) {
   const der = await crypto.subtle.exportKey("spki", key);
-  let pemContents = btoa(arrayBufferToString(der));
+  let pemContents = btoa(btos(der));
   let pem = "-----BEGIN PUBLIC KEY-----\n";
   while (pemContents.length > 0) {
     pem += pemContents.substring(0, 64) + "\n";
@@ -99,18 +111,18 @@ async function postInbox(req: string, data: any, headers: any) {
 async function signHeaders(res: any, strName: string, strHost: string, strInbox: string) {
   const strTime = new Date().toUTCString();
   const s = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(res)));
-  const s256 = btoa(arrayBufferToString(s));
+  const s256 = btoa(btos(s));
   const sig = await crypto.subtle.sign(
     "RSASSA-PKCS1-v1_5",
     PRIVATE_KEY,
-    stringToArrayBuffer(
+    stob(
       `(request-target): post ${new URL(strInbox).pathname}\n` +
         `host: ${new URL(strInbox).hostname}\n` +
         `date: ${strTime}\n` +
         `digest: SHA-256=${s256}`,
     ),
   );
-  const b64 = btoa(arrayBufferToString(sig));
+  const b64 = btoa(btos(sig));
   const headers = {
     Host: new URL(strInbox).hostname,
     Date: strTime,
@@ -122,17 +134,17 @@ async function signHeaders(res: any, strName: string, strHost: string, strInbox:
     Accept: "application/activity+json",
     "Content-Type": "application/activity+json",
     "Accept-Encoding": "gzip",
-    "User-Agent": `Matchbox/0.1.0 (+https://${strHost}/)`,
+    "User-Agent": `Matchbox/0.2.0 (+https://${strHost}/)`,
   };
   return headers;
 }
 
 async function acceptFollow(strName: string, strHost: string, x: any, y: any) {
-  const numId = crypto.randomUUID();
+  const strId = crypto.randomUUID();
   const strInbox = x.inbox;
   const res = {
     "@context": "https://www.w3.org/ns/activitystreams",
-    id: `https://${strHost}/u/${strName}/s/${numId}`,
+    id: `https://${strHost}/u/${strName}/s/${strId}`,
     type: "Accept",
     actor: `https://${strHost}/u/${strName}`,
     object: y,
@@ -142,11 +154,11 @@ async function acceptFollow(strName: string, strHost: string, x: any, y: any) {
 }
 
 async function follow(strName: string, strHost: string, x: any) {
-  const numId = crypto.randomUUID();
+  const strId = crypto.randomUUID();
   const strInbox = x.inbox;
   const res = {
     "@context": "https://www.w3.org/ns/activitystreams",
-    id: `https://${strHost}/u/${strName}/s/${numId}`,
+    id: `https://${strHost}/u/${strName}/s/${strId}`,
     type: "Follow",
     actor: `https://${strHost}/u/${strName}`,
     object: x.id,
@@ -156,11 +168,11 @@ async function follow(strName: string, strHost: string, x: any) {
 }
 
 async function undoFollow(strName: string, strHost: string, x: any) {
-  const numId = crypto.randomUUID();
+  const strId = crypto.randomUUID();
   const strInbox = x.inbox;
   const res = {
     "@context": "https://www.w3.org/ns/activitystreams",
-    id: `https://${strHost}/u/${strName}/s/${numId}`,
+    id: `https://${strHost}/u/${strName}/s/${strId}`,
     type: "Undo",
     actor: `https://${strHost}/u/${strName}`,
     object: {
@@ -173,11 +185,11 @@ async function undoFollow(strName: string, strHost: string, x: any) {
 }
 
 async function like(strName: string, strHost: string, x: any, y: any) {
-  const numId = crypto.randomUUID();
+  const strId = crypto.randomUUID();
   const strInbox = y.inbox;
   const res = {
     "@context": "https://www.w3.org/ns/activitystreams",
-    id: `https://${strHost}/u/${strName}/s/${numId}`,
+    id: `https://${strHost}/u/${strName}/s/${strId}`,
     type: "Like",
     actor: `https://${strHost}/u/${strName}`,
     object: x.id,
@@ -187,11 +199,11 @@ async function like(strName: string, strHost: string, x: any, y: any) {
 }
 
 async function undoLike(strName: string, strHost: string, x: any, y: any) {
-  const numId = crypto.randomUUID();
+  const strId = crypto.randomUUID();
   const strInbox = y.inbox;
   const res = {
     "@context": "https://www.w3.org/ns/activitystreams",
-    id: `https://${strHost}/u/${strName}/s/${numId}`,
+    id: `https://${strHost}/u/${strName}/s/${strId}`,
     type: "Undo",
     actor: `https://${strHost}/u/${strName}`,
     object: {
@@ -204,12 +216,12 @@ async function undoLike(strName: string, strHost: string, x: any, y: any) {
 }
 
 async function announce(strName: string, strHost: string, x: any, y: any) {
-  const numId = crypto.randomUUID();
+  const strId = crypto.randomUUID();
   const strTime = new Date().toISOString().slice(0, -5) + "Z";
   const strInbox = y.inbox;
   const res = {
     "@context": "https://www.w3.org/ns/activitystreams",
-    id: `https://${strHost}/u/${strName}/s/${numId}`,
+    id: `https://${strHost}/u/${strName}/s/${strId}`,
     type: "Announce",
     actor: `https://${strHost}/u/${strName}`,
     published: strTime,
@@ -222,11 +234,11 @@ async function announce(strName: string, strHost: string, x: any, y: any) {
 }
 
 async function undoAnnounce(strName: string, strHost: string, x: any, y: any) {
-  const numId = crypto.randomUUID();
+  const strId = crypto.randomUUID();
   const strInbox = y.inbox;
   const res = {
     "@context": "https://www.w3.org/ns/activitystreams",
-    id: `https://${strHost}/u/${strName}/s/${numId}`,
+    id: `https://${strHost}/u/${strName}/s/${strId}`,
     type: "Undo",
     actor: `https://${strHost}/u/${strName}`,
     object: {
@@ -239,23 +251,23 @@ async function undoAnnounce(strName: string, strHost: string, x: any, y: any) {
 }
 
 async function createNote(strName: string, strHost: string, x: any, y: string) {
-  const numId = crypto.randomUUID();
+  const strId = crypto.randomUUID();
   const strTime = new Date().toISOString().slice(0, -5) + "Z";
   const strInbox = x.inbox;
   const res = {
     "@context": "https://www.w3.org/ns/activitystreams",
-    id: `https://${strHost}/u/${strName}/s/${numId}/activity`,
+    id: `https://${strHost}/u/${strName}/s/${strId}/activity`,
     type: "Create",
     actor: `https://${strHost}/u/${strName}`,
     published: strTime,
     to: ["https://www.w3.org/ns/activitystreams#Public"],
     cc: [`https://${strHost}/u/${strName}/followers`],
     object: {
-      id: `https://${strHost}/u/${strName}/s/${numId}`,
+      id: `https://${strHost}/u/${strName}/s/${strId}`,
       type: "Note",
       attributedTo: `https://${strHost}/u/${strName}`,
       content: talkScript(y),
-      url: `https://${strHost}/u/${strName}/s/${numId}`,
+      url: `https://${strHost}/u/${strName}/s/${strId}`,
       published: strTime,
       to: ["https://www.w3.org/ns/activitystreams#Public"],
       cc: [`https://${strHost}/u/${strName}/followers`],
@@ -266,24 +278,24 @@ async function createNote(strName: string, strHost: string, x: any, y: string) {
 }
 
 async function createNoteMention(strName: string, strHost: string, x: any, y: any, z: string) {
-  const numId = crypto.randomUUID();
+  const strId = crypto.randomUUID();
   const strTime = new Date().toISOString().slice(0, -5) + "Z";
   const strInbox = y.inbox;
   const res = {
     "@context": "https://www.w3.org/ns/activitystreams",
-    id: `https://${strHost}/u/${strName}/s/${numId}/activity`,
+    id: `https://${strHost}/u/${strName}/s/${strId}/activity`,
     type: "Create",
     actor: `https://${strHost}/u/${strName}`,
     published: strTime,
     to: ["https://www.w3.org/ns/activitystreams#Public"],
     cc: [`https://${strHost}/u/${strName}/followers`],
     object: {
-      id: `https://${strHost}/u/${strName}/s/${numId}`,
+      id: `https://${strHost}/u/${strName}/s/${strId}`,
       type: "Note",
       attributedTo: `https://${strHost}/u/${strName}`,
       inReplyTo: x.id,
       content: talkScript(z),
-      url: `https://${strHost}/u/${strName}/s/${numId}`,
+      url: `https://${strHost}/u/${strName}/s/${strId}`,
       published: strTime,
       to: ["https://www.w3.org/ns/activitystreams#Public"],
       cc: [`https://${strHost}/u/${strName}/followers`],
@@ -300,23 +312,23 @@ async function createNoteMention(strName: string, strHost: string, x: any, y: an
 }
 
 async function createNoteHashtag(strName: string, strHost: string, x: any, y: string, z: string) {
-  const numId = crypto.randomUUID();
+  const strId = crypto.randomUUID();
   const strTime = new Date().toISOString().slice(0, -5) + "Z";
   const strInbox = x.inbox;
   const res = {
     "@context": ["https://www.w3.org/ns/activitystreams", { Hashtag: "as:Hashtag" }],
-    id: `https://${strHost}/u/${strName}/s/${numId}/activity`,
+    id: `https://${strHost}/u/${strName}/s/${strId}/activity`,
     type: "Create",
     actor: `https://${strHost}/u/${strName}`,
     published: strTime,
     to: ["https://www.w3.org/ns/activitystreams#Public"],
     cc: [`https://${strHost}/u/${strName}/followers`],
     object: {
-      id: `https://${strHost}/u/${strName}/s/${numId}`,
+      id: `https://${strHost}/u/${strName}/s/${strId}`,
       type: "Note",
       attributedTo: `https://${strHost}/u/${strName}`,
       content: talkScript(y),
-      url: `https://${strHost}/u/${strName}/s/${numId}`,
+      url: `https://${strHost}/u/${strName}/s/${strId}`,
       published: strTime,
       to: ["https://www.w3.org/ns/activitystreams#Public"],
       cc: [`https://${strHost}/u/${strName}/followers`],
@@ -333,11 +345,11 @@ async function createNoteHashtag(strName: string, strHost: string, x: any, y: st
 }
 
 async function deleteNote(strName: string, strHost: string, x: any, y: string) {
-  const numId = crypto.randomUUID();
+  const strId = crypto.randomUUID();
   const strInbox = x.inbox;
   const res = {
     "@context": "https://www.w3.org/ns/activitystreams",
-    id: `https://${strHost}/u/${strName}/s/${numId}/activity`,
+    id: `https://${strHost}/u/${strName}/s/${strId}/activity`,
     type: "Delete",
     actor: `https://${strHost}/u/${strName}`,
     object: {
@@ -368,7 +380,7 @@ app.get("/u/:strName", (c) => {
     followers: `https://${strHost}/u/${strName}/followers`,
     preferredUsername: strName,
     name: CONFIG.name,
-    summary: `<p>0.1.0</p>`,
+    summary: `<p>0.2.0</p>`,
     url: `https://${strHost}/u/${strName}`,
     publicKey: {
       id: `https://${strHost}/u/${strName}`,
@@ -397,7 +409,7 @@ app.post("/u/:strName/inbox", async (c) => {
   if (strName !== CONFIG.preferredUsername) return c.notFound();
   if (!c.req.header("Content-Type").includes("application/activity+json")) return c.body(null, 400);
   const b = await c.req.parseBody();
-  const y = JSON.parse(new TextDecoder().decode(b));
+  const y = JSON.parse(new TextDecoder().decode(b as any));
   if (new URL(y.actor).protocol !== "https:") return c.body(null, 400);
   console.log(y.id, y.type);
   const x = await getInbox(y.actor);
@@ -468,7 +480,7 @@ app.post("/s/:strSecret/u/:strName", async (c) => {
   const strHost = new URL(c.req.url).hostname;
   if (strName !== CONFIG.preferredUsername) return c.notFound();
   if (!c.req.param("strSecret") || c.req.param("strSecret") === "-") return c.notFound();
-  if (c.req.param("strSecret") !== Deno.env.get("SECRET")) return c.notFound();
+  if (c.req.param("strSecret") !== String(Deno.env.get("SECRET"))) return c.notFound();
   if (!c.req.query("id") || !c.req.query("type")) return c.body(null, 400);
   if (new URL(c.req.query("id")).protocol !== "https:") return c.body(null, 400);
   const x = await getInbox(c.req.query("id"));
@@ -540,6 +552,23 @@ app.post("/s/:strSecret/u/:strName", async (c) => {
   return c.body(null, 500);
 });
 
+app.get("/.well-known/nodeinfo", (c) => {
+  const strHost = new URL(c.req.url).hostname;
+  const r = {
+    links: [
+      {
+        href: `https://${strHost}/nodeinfo/2.0.json`,
+        rel: "http://nodeinfo.diaspora.software/ns/schema/2.0",
+      },
+      {
+        href: `https://${strHost}/nodeinfo/2.1.json`,
+        rel: "http://nodeinfo.diaspora.software/ns/schema/2.1",
+      },
+    ],
+  };
+  return c.json(r, 200);
+});
+
 app.get("/.well-known/webfinger", (c) => {
   const strName = CONFIG.preferredUsername;
   const strHost = new URL(c.req.url).hostname;
@@ -563,6 +592,7 @@ app.get("/.well-known/webfinger", (c) => {
   return c.json(r, 200, { "Content-Type": "jrd+json" });
 });
 
+app.get("/s", (c) => c.notFound());
 app.get("/@", (c) => c.redirect("/"));
 app.get("/u", (c) => c.redirect("/"));
 app.get("/user", (c) => c.redirect("/"));
@@ -576,6 +606,6 @@ app.get("/:strRoot", (c) => {
 });
 
 serve((r) => app.fetch(r), {
-  hostname: Deno.env.get("HOST") || "localhost",
+  hostname: String(Deno.env.get("HOST")) || "localhost",
   port: Number(Deno.env.get("PORT")) || 8000,
 });
