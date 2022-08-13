@@ -480,7 +480,7 @@ app.post("/s/:strSecret/u/:strName", async (c) => {
   const strHost = new URL(c.req.url).hostname;
   if (strName !== CONFIG.preferredUsername) return c.notFound();
   if (!c.req.param("strSecret") || c.req.param("strSecret") === "-") return c.notFound();
-  if (c.req.param("strSecret") !== String(Deno.env.get("SECRET"))) return c.notFound();
+  if (c.req.param("strSecret") !== Deno.env.get("SECRET")) return c.notFound();
   if (!c.req.query("id") || !c.req.query("type")) return c.body(null, 400);
   if (new URL(c.req.query("id")).protocol !== "https:") return c.body(null, 400);
   const x = await getInbox(c.req.query("id"));
@@ -606,6 +606,6 @@ app.get("/:strRoot", (c) => {
 });
 
 serve((r) => app.fetch(r), {
-  hostname: String(Deno.env.get("HOST")) || "localhost",
+  hostname: Deno.env.get("HOST") || "localhost",
   port: Number(Deno.env.get("PORT")) || 8000,
 });
