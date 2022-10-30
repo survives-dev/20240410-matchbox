@@ -6,14 +6,14 @@ import { basicAuth } from "hono/basic-auth";
 import { serveStatic } from "hono/serve-static";
 
 const ENV = {
-  HOST: String(Deno.env.get("HOST")),
-  PORT: Number(Deno.env.get("PORT")),
-  ENABLE_BASIC_AUTH: String(Deno.env.get("ENABLE_BASIC_AUTH")),
-  BASIC_AUTH_USERNAME: String(Deno.env.get("BASIC_AUTH_USERNAME")),
-  BASIC_AUTH_PASSWORD: String(Deno.env.get("BASIC_AUTH_PASSWORD")),
-  SECRET: String(Deno.env.get("SECRET")),
-  PRIVATE_KEY: String(Deno.env.get("PRIVATE_KEY")),
-};
+  HOST: Deno.env.get("HOST"),
+  PORT: Deno.env.get("PORT"),
+  ENABLE_BASIC_AUTH: Deno.env.get("ENABLE_BASIC_AUTH"),
+  BASIC_AUTH_USERNAME: Deno.env.get("BASIC_AUTH_USERNAME"),
+  BASIC_AUTH_PASSWORD: Deno.env.get("BASIC_AUTH_PASSWORD"),
+  SECRET: Deno.env.get("SECRET"),
+  PRIVATE_KEY: Deno.env.get("PRIVATE_KEY"),
+} as { [key: string]: string };
 
 const app = new Hono();
 app.use("/public/*", serveStatic({ root: "./public/" }));
@@ -619,5 +619,5 @@ app.get("/:strRoot", (c) => {
 
 serve(app.fetch, {
   hostname: ENV.HOST || "localhost",
-  port: ENV.PORT || 8000,
+  port: Number(ENV.PORT) || 8000,
 });
