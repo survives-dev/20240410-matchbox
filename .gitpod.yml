@@ -1,8 +1,8 @@
 tasks:
   - init: bash env.sh
     command: |
-      curl -fsSL https://deno.land/x/install/install.sh | sh
-      export DENO_INSTALL="/home/gitpod/.deno"
+      curl -fsSL https://deno.land/install.sh | sh
+      export DENO_INSTALL="$HOME/.deno"
       export PATH="$DENO_INSTALL/bin:$PATH"
       deno task start
 ports:

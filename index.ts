@@ -1,27 +1,40 @@
-import { crypto } from "https://deno.land/std@0.152.0/crypto/mod.ts";
-import "https://deno.land/std@0.152.0/dotenv/load.ts";
-import { serve } from "https://deno.land/std@0.152.0/http/server.ts";
-import { Hono } from "https://deno.land/x/hono@v2.0.8/mod.ts";
-import { basicAuth, serveStatic } from "https://deno.land/x/hono@v2.0.8/middleware.ts";
+import { crypto } from "crypto";
+import "dotenv";
+import { serve } from "server";
+import { Hono } from "hono";
+import { basicAuth } from "hono/basic-auth";
+import { serveStatic } from "hono/serve-static";
+
+const ENV = {
+  HOST: String(Deno.env.get("HOST")),
+  PORT: Number(Deno.env.get("PORT")),
+  ENABLE_BASIC_AUTH: String(Deno.env.get("ENABLE_BASIC_AUTH")),
+  BASIC_AUTH_USERNAME: String(Deno.env.get("BASIC_AUTH_USERNAME")),
+  BASIC_AUTH_PASSWORD: String(Deno.env.get("BASIC_AUTH_PASSWORD")),
+  SECRET: String(Deno.env.get("SECRET")),
+  PRIVATE_KEY: String(Deno.env.get("PRIVATE_KEY")),
+};
 
 const app = new Hono();
 app.use("/public/*", serveStatic({ root: "./public/" }));
 app.use("/nodeinfo/*", serveStatic({ root: "./public/" }));
 app.use("/favicon.ico", serveStatic({ path: "./public/favicon.ico" }));
 app.use("/robots.txt", serveStatic({ path: "./public/robots.txt" }));
-if (Deno.env.get("ENABLE_BASIC_AUTH")) {
-  app.use(
-    "/s/*",
-    basicAuth({
-      username: String(Deno.env.get("BASIC_AUTH_USERNAME")),
-      password: String(Deno.env.get("BASIC_AUTH_PASSWORD")),
-    }),
-  );
-}
+app.use("/s/*", async (c, next) => {
+  if (ENV.ENABLE_BASIC_AUTH.toLowerCase() === "true" && c.req.method === "POST") {
+    const auth = basicAuth({
+      username: ENV.BASIC_AUTH_USERNAME,
+      password: ENV.BASIC_AUTH_PASSWORD,
+    });
+    return auth(c, next);
+  } else {
+    await next();
+  }
+});
 app.onError((_err, c) => c.body(null, 500));
 
 const CONFIG = { preferredUsername: "a", name: "Alice" };
-const PRIVATE_KEY = await readPrivateKey(String(Deno.env.get("PRIVATE_KEY")));
+const PRIVATE_KEY = await readPrivateKey(ENV.PRIVATE_KEY);
 const PUBLIC_KEY = await privateKeyToPublicKey(PRIVATE_KEY);
 const PUBLIC_KEY_PEM = await writePublicKey(PUBLIC_KEY);
 
@@ -105,7 +118,7 @@ async function getInbox(req: string) {
 
 async function postInbox(req: string, data: any, headers: any) {
   console.log(req, data);
-  await fetch(req, { method: "POST", body: JSON.stringify(data), headers: headers });
+  await fetch(req, { method: "POST", body: JSON.stringify(data), headers });
 }
 
 async function signHeaders(res: any, strName: string, strHost: string, strInbox: string) {
@@ -134,7 +147,7 @@ async function signHeaders(res: any, strName: string, strHost: string, strInbox:
     Accept: "application/activity+json",
     "Content-Type": "application/activity+json",
     "Accept-Encoding": "gzip",
-    "User-Agent": `Matchbox/0.2.0 (+https://${strHost}/)`,
+    "User-Agent": `Matchbox/0.3.0 (+https://${strHost}/)`,
   };
   return headers;
 }
@@ -380,7 +393,7 @@ app.get("/u/:strName", (c) => {
     followers: `https://${strHost}/u/${strName}/followers`,
     preferredUsername: strName,
     name: CONFIG.name,
-    summary: `<p>0.2.0</p>`,
+    summary: `<p>0.3.0</p>`,
     url: `https://${strHost}/u/${strName}`,
     publicKey: {
       id: `https://${strHost}/u/${strName}`,
@@ -408,8 +421,7 @@ app.post("/u/:strName/inbox", async (c) => {
   const strHost = new URL(c.req.url).hostname;
   if (strName !== CONFIG.preferredUsername) return c.notFound();
   if (!c.req.header("Content-Type").includes("application/activity+json")) return c.body(null, 400);
-  const b = await c.req.parseBody();
-  const y = JSON.parse(new TextDecoder().decode(b as any));
+  const y = await c.req.json<any>();
   if (new URL(y.actor).protocol !== "https:") return c.body(null, 400);
   console.log(y.id, y.type);
   const x = await getInbox(y.actor);
@@ -480,7 +492,7 @@ app.post("/s/:strSecret/u/:strName", async (c) => {
   const strHost = new URL(c.req.url).hostname;
   if (strName !== CONFIG.preferredUsername) return c.notFound();
   if (!c.req.param("strSecret") || c.req.param("strSecret") === "-") return c.notFound();
-  if (c.req.param("strSecret") !== Deno.env.get("SECRET")) return c.notFound();
+  if (c.req.param("strSecret") !== ENV.SECRET) return c.notFound();
   if (!c.req.query("id") || !c.req.query("type")) return c.body(null, 400);
   if (new URL(c.req.query("id")).protocol !== "https:") return c.body(null, 400);
   const x = await getInbox(c.req.query("id"));
@@ -566,7 +578,7 @@ app.get("/.well-known/nodeinfo", (c) => {
       },
     ],
   };
-  return c.json(r, 200);
+  return c.json(r);
 });
 
 app.get("/.well-known/webfinger", (c) => {
@@ -605,7 +617,7 @@ app.get("/:strRoot", (c) => {
   return c.redirect(`/u/${c.req.param("strRoot").slice(1)}`);
 });
 
-serve((r) => app.fetch(r), {
-  hostname: Deno.env.get("HOST") || "localhost",
-  port: Number(Deno.env.get("PORT")) || 8000,
+serve(app.fetch, {
+  hostname: ENV.HOST || "localhost",
+  port: ENV.PORT || 8000,
 });
