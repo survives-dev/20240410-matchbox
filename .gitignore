@@ -2,6 +2,7 @@
 # config.txt
 
 /node_modules
+/vendor
 
 tmp/
 
