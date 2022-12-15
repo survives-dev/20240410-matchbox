@@ -1,10 +1,9 @@
 {
   "imports": {
-    "crypto": "https://deno.land/std@0.161.0/crypto/mod.ts",
-    "dotenv": "https://deno.land/std@0.161.0/dotenv/load.ts",
-    "server": "https://deno.land/std@0.161.0/http/server.ts",
-    "hono": "https://deno.land/x/hono@v2.3.2/mod.ts",
-    "hono/basic-auth": "https://deno.land/x/hono@v2.3.2/middleware.ts",
-    "hono/serve-static": "https://deno.land/x/hono@v2.3.2/middleware.ts"
+    "dotenv/load": "https://deno.land/std@0.168.0/dotenv/load.ts",
+    "hono": "https://deno.land/x/hono@v2.6.2/mod.ts",
+    "hono/basic-auth": "https://deno.land/x/hono@v2.6.2/middleware.ts",
+    "hono/serve-static": "https://deno.land/x/hono@v2.6.2/middleware.ts",
+    "server": "https://deno.land/std@0.168.0/http/server.ts"
   }
 }

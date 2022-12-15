@@ -2,7 +2,7 @@
   "version": "2.1",
   "software": {
     "name": "matchbox",
-    "version": "0.3.0",
+    "version": "0.4.0",
     "repository": "https://gitlab.com/acefed/matchbox",
     "homepage": "https://gitlab.com/acefed/matchbox"
   },

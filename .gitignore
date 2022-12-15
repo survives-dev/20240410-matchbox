@@ -1,7 +1,8 @@
 # config.json
 # config.txt
 
-/vendor
+/node_modules
+
 tmp/
 
 .env

@@ -1,12 +1,11 @@
-import { crypto } from "crypto";
-import "dotenv";
+import "dotenv/load";
 import { serve } from "server";
 import { Hono } from "hono";
 import { basicAuth } from "hono/basic-auth";
 import { serveStatic } from "hono/serve-static";
 
 const ENV = {
-  HOST: Deno.env.get("HOST"),
+  HOSTS: Deno.env.get("HOSTS"),
   PORT: Deno.env.get("PORT"),
   ENABLE_BASIC_AUTH: Deno.env.get("ENABLE_BASIC_AUTH"),
   BASIC_AUTH_USERNAME: Deno.env.get("BASIC_AUTH_USERNAME"),
@@ -21,7 +20,7 @@ app.use("/nodeinfo/*", serveStatic({ root: "./public/" }));
 app.use("/favicon.ico", serveStatic({ path: "./public/favicon.ico" }));
 app.use("/robots.txt", serveStatic({ path: "./public/robots.txt" }));
 app.use("/s/*", async (c, next) => {
-  if (ENV.ENABLE_BASIC_AUTH.toLowerCase() === "true" && c.req.method === "POST") {
+  if (ENV.ENABLE_BASIC_AUTH === "true" && c.req.method === "POST") {
     const auth = basicAuth({
       username: ENV.BASIC_AUTH_USERNAME,
       password: ENV.BASIC_AUTH_PASSWORD,
@@ -33,10 +32,11 @@ app.use("/s/*", async (c, next) => {
 });
 app.onError((_err, c) => c.body(null, 500));
 
-const CONFIG = { preferredUsername: "a", name: "Alice" };
-const PRIVATE_KEY = await readPrivateKey(ENV.PRIVATE_KEY);
+const PRIVATE_KEY = await importprivateKey(ENV.PRIVATE_KEY);
 const PUBLIC_KEY = await privateKeyToPublicKey(PRIVATE_KEY);
-const PUBLIC_KEY_PEM = await writePublicKey(PUBLIC_KEY);
+const public_key_pem = await exportPublicKey(PUBLIC_KEY);
+const config_json = await Deno.readTextFile("config.json");
+const CONFIG = JSON.parse(config_json);
 
 function stob(s: string) {
   return Uint8Array.from(s, (c) => c.charCodeAt(0));
@@ -46,7 +46,7 @@ function btos(b: ArrayBuffer) {
   return String.fromCharCode(...new Uint8Array(b));
 }
 
-async function readPrivateKey(pem: string) {
+async function importprivateKey(pem: string) {
   const pemHeader = "-----BEGIN PRIVATE KEY-----";
   const pemFooter = "-----END PRIVATE KEY-----";
   if (pem.startsWith('"')) pem = pem.slice(1);
@@ -91,7 +91,7 @@ async function privateKeyToPublicKey(key: CryptoKey) {
   return r;
 }
 
-async function writePublicKey(key: CryptoKey) {
+async function exportPublicKey(key: CryptoKey) {
   const der = await crypto.subtle.exportKey("spki", key);
   let pemContents = btoa(btos(der));
   let pem = "-----BEGIN PUBLIC KEY-----\n";
@@ -116,7 +116,7 @@ async function getInbox(req: string) {
   return res.json();
 }
 
-async function postInbox(req: string, data: any, headers: any) {
+async function postInbox(req: string, data: any, headers: { [key: string]: string }) {
   console.log(req, data);
   await fetch(req, { method: "POST", body: JSON.stringify(data), headers });
 }
@@ -147,7 +147,7 @@ async function signHeaders(res: any, strName: string, strHost: string, strInbox:
     Accept: "application/activity+json",
     "Content-Type": "application/activity+json",
     "Accept-Encoding": "gzip",
-    "User-Agent": `Matchbox/0.3.0 (+https://${strHost}/)`,
+    "User-Agent": `Matchbox/0.4.0 (+https://${strHost}/)`,
   };
   return headers;
 }
@@ -230,7 +230,7 @@ async function undoLike(strName: string, strHost: string, x: any, y: any) {
 
 async function announce(strName: string, strHost: string, x: any, y: any) {
   const strId = crypto.randomUUID();
-  const strTime = new Date().toISOString().slice(0, -5) + "Z";
+  const strTime = new Date().toISOString().substring(0, 19) + "Z";
   const strInbox = y.inbox;
   const res = {
     "@context": "https://www.w3.org/ns/activitystreams",
@@ -265,7 +265,7 @@ async function undoAnnounce(strName: string, strHost: string, x: any, y: any) {
 
 async function createNote(strName: string, strHost: string, x: any, y: string) {
   const strId = crypto.randomUUID();
-  const strTime = new Date().toISOString().slice(0, -5) + "Z";
+  const strTime = new Date().toISOString().substring(0, 19) + "Z";
   const strInbox = x.inbox;
   const res = {
     "@context": "https://www.w3.org/ns/activitystreams",
@@ -292,7 +292,7 @@ async function createNote(strName: string, strHost: string, x: any, y: string) {
 
 async function createNoteMention(strName: string, strHost: string, x: any, y: any, z: string) {
   const strId = crypto.randomUUID();
-  const strTime = new Date().toISOString().slice(0, -5) + "Z";
+  const strTime = new Date().toISOString().substring(0, 19) + "Z";
   const strInbox = y.inbox;
   const res = {
     "@context": "https://www.w3.org/ns/activitystreams",
@@ -326,7 +326,7 @@ async function createNoteMention(strName: string, strHost: string, x: any, y: an
 
 async function createNoteHashtag(strName: string, strHost: string, x: any, y: string, z: string) {
   const strId = crypto.randomUUID();
-  const strTime = new Date().toISOString().slice(0, -5) + "Z";
+  const strTime = new Date().toISOString().substring(0, 19) + "Z";
   const strInbox = x.inbox;
   const res = {
     "@context": ["https://www.w3.org/ns/activitystreams", { Hashtag: "as:Hashtag" }],
@@ -393,13 +393,13 @@ app.get("/u/:strName", (c) => {
     followers: `https://${strHost}/u/${strName}/followers`,
     preferredUsername: strName,
     name: CONFIG.name,
-    summary: `<p>0.3.0</p>`,
+    summary: `<p>0.4.0</p>`,
     url: `https://${strHost}/u/${strName}`,
     publicKey: {
       id: `https://${strHost}/u/${strName}`,
       type: "Key",
       owner: `https://${strHost}/u/${strName}`,
-      publicKeyPem: PUBLIC_KEY_PEM,
+      publicKeyPem: public_key_pem,
     },
     icon: {
       type: "Image",
@@ -618,6 +618,6 @@ app.get("/:strRoot", (c) => {
 });
 
 serve(app.fetch, {
-  hostname: ENV.HOST || "localhost",
-  port: Number(ENV.PORT) || 8000,
+  hostname: ENV.HOSTS || "localhost",
+  port: Number(ENV.PORT) || 8080,
 });
