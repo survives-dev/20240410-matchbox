@@ -35,7 +35,7 @@ app.onError((_err, c) => c.body(null, 500));
 const PRIVATE_KEY = await importprivateKey(ENV.PRIVATE_KEY);
 const PUBLIC_KEY = await privateKeyToPublicKey(PRIVATE_KEY);
 const public_key_pem = await exportPublicKey(PUBLIC_KEY);
-const config_json = await Deno.readTextFile("config.json");
+const config_json = Deno.readTextFileSync("config.json");
 const CONFIG = JSON.parse(config_json);
 
 function stob(s: string) {
