@@ -37,7 +37,7 @@ const PRIVATE_KEY = await importPrivateKey(ENV.PRIVATE_KEY);
 const PUBLIC_KEY = await privateKeyToPublicKey(PRIVATE_KEY);
 const publicKeyPem = await exportPublicKey(PUBLIC_KEY);
 const publicKeyJwk = await crypto.subtle.exportKey("jwk", PUBLIC_KEY);
-const configJsonFile = await Deno.readTextFile("config.json");
+if (!ENV.CONFIG_JSON) const configJsonFile = await Deno.readTextFile("config.json");
 const configJson = JSON.parse(ENV.CONFIG_JSON || configJsonFile);
 const CONFIG = {
   origin: configJson.origin || "https://localhost",
