@@ -1,0 +1,6 @@
+{
+  "origin": "https://example",
+  "preferredUsername": "a",
+  "name": "Alice",
+  "maxAge": 86400
+}

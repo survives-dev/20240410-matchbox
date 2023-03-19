@@ -18,6 +18,6 @@
   },
   "tasks": {
     "start": "deno run --allow-read=. --allow-net --allow-env index.ts",
-    "test": "deno lint && deno fmt && deno check index.ts"
+    "test": "deno lint && deno fmt && deno test -A && deno bench -A"
   }
 }

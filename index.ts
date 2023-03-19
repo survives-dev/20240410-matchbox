@@ -1,5 +1,5 @@
 import "dotenv/load";
-import { serve } from "server";
+import { serve } from "http/server";
 import { Hono } from "hono";
 import { basicAuth } from "hono/basic-auth";
 import { serveStatic } from "hono/serve-static";
@@ -7,6 +7,7 @@ import { serveStatic } from "hono/serve-static";
 const ENV = {
   HOSTS: Deno.env.get("HOSTS"),
   PORT: Deno.env.get("PORT"),
+  CONFIG_JSON: Deno.env.get("CONFIG_JSON"),
   ENABLE_BASIC_AUTH: Deno.env.get("ENABLE_BASIC_AUTH"),
   BASIC_AUTH_USERNAME: Deno.env.get("BASIC_AUTH_USERNAME"),
   BASIC_AUTH_PASSWORD: Deno.env.get("BASIC_AUTH_PASSWORD"),
@@ -32,11 +33,18 @@ app.use("/s/*", async (c, next) => {
 });
 app.onError((_err, c) => c.body(null, 500));
 
-const PRIVATE_KEY = await importprivateKey(ENV.PRIVATE_KEY);
+const PRIVATE_KEY = await importPrivateKey(ENV.PRIVATE_KEY);
 const PUBLIC_KEY = await privateKeyToPublicKey(PRIVATE_KEY);
-const public_key_pem = await exportPublicKey(PUBLIC_KEY);
-const config_json = Deno.readTextFileSync("config.json");
-const CONFIG = JSON.parse(config_json);
+const publicKeyPem = await exportPublicKey(PUBLIC_KEY);
+const publicKeyJwk = await crypto.subtle.exportKey("jwk", PUBLIC_KEY);
+const configJsonFile = await Deno.readTextFile("config.json");
+const configJson = JSON.parse(ENV.CONFIG_JSON || configJsonFile);
+const CONFIG = {
+  origin: configJson.origin || "https://localhost",
+  preferredUsername: configJson.preferredUsername || "a",
+  name: configJson.name || "Anonymous",
+  maxAge: configJson.maxAge || 0,
+};
 
 function stob(s: string) {
   return Uint8Array.from(s, (c) => c.charCodeAt(0));
@@ -46,7 +54,7 @@ function btos(b: ArrayBuffer) {
   return String.fromCharCode(...new Uint8Array(b));
 }
 
-async function importprivateKey(pem: string) {
+async function importPrivateKey(pem: string) {
   const pemHeader = "-----BEGIN PRIVATE KEY-----";
   const pemFooter = "-----END PRIVATE KEY-----";
   if (pem.startsWith('"')) pem = pem.slice(1);
@@ -104,19 +112,22 @@ async function exportPublicKey(key: CryptoKey) {
 }
 
 function talkScript(req: string) {
-  return `<p><a href="https://${new URL(req).hostname}/">${new URL(req).hostname}</a></p>`;
+  const strHost = new URL(req).hostname;
+  return `<p><a href="https://${strHost}/" rel="nofollow noopener noreferrer" target="_blank">${strHost}</a></p>`;
 }
 
-async function getInbox(req: string) {
+async function getActivity(req: string, strHost: string) {
   console.log(req);
-  const res = await fetch(req, {
-    method: "GET",
-    headers: { Accept: "application/activity+json" },
-  });
+  const headers = {
+    Accept: "application/activity+json",
+    "Accept-Encoding": "gzip",
+    "User-Agent": `Matchbox/0.5.0 (+https://${strHost}/)`,
+  };
+  const res = await fetch(req, { method: "GET", headers });
   return res.json();
 }
 
-async function postInbox(req: string, data: any, headers: { [key: string]: string }) {
+async function postActivity(req: string, data: any, headers: { [key: string]: string }) {
   console.log(req, data);
   await fetch(req, { method: "POST", body: JSON.stringify(data), headers });
 }
@@ -140,14 +151,14 @@ async function signHeaders(res: any, strName: string, strHost: string, strInbox:
     Host: new URL(strInbox).hostname,
     Date: strTime,
     Digest: `SHA-256=${s256}`,
-    Signature: `keyId="https://${strHost}/u/${strName}",` +
+    Signature: `keyId="https://${strHost}/u/${strName}#Key",` +
       `algorithm="rsa-sha256",` +
       `headers="(request-target) host date digest",` +
       `signature="${b64}"`,
     Accept: "application/activity+json",
-    "Content-Type": "application/activity+json",
     "Accept-Encoding": "gzip",
-    "User-Agent": `Matchbox/0.4.0 (+https://${strHost}/)`,
+    "Content-Type": "application/activity+json",
+    "User-Agent": `Matchbox/0.5.0 (+https://${strHost}/)`,
   };
   return headers;
 }
@@ -163,7 +174,7 @@ async function acceptFollow(strName: string, strHost: string, x: any, y: any) {
     object: y,
   };
   const headers = await signHeaders(res, strName, strHost, strInbox);
-  await postInbox(strInbox, res, headers);
+  await postActivity(strInbox, res, headers);
 }
 
 async function follow(strName: string, strHost: string, x: any) {
@@ -177,7 +188,7 @@ async function follow(strName: string, strHost: string, x: any) {
     object: x.id,
   };
   const headers = await signHeaders(res, strName, strHost, strInbox);
-  await postInbox(strInbox, res, headers);
+  await postActivity(strInbox, res, headers);
 }
 
 async function undoFollow(strName: string, strHost: string, x: any) {
@@ -194,7 +205,7 @@ async function undoFollow(strName: string, strHost: string, x: any) {
     },
   };
   const headers = await signHeaders(res, strName, strHost, strInbox);
-  await postInbox(strInbox, res, headers);
+  await postActivity(strInbox, res, headers);
 }
 
 async function like(strName: string, strHost: string, x: any, y: any) {
@@ -208,7 +219,7 @@ async function like(strName: string, strHost: string, x: any, y: any) {
     object: x.id,
   };
   const headers = await signHeaders(res, strName, strHost, strInbox);
-  await postInbox(strInbox, res, headers);
+  await postActivity(strInbox, res, headers);
 }
 
 async function undoLike(strName: string, strHost: string, x: any, y: any) {
@@ -225,7 +236,7 @@ async function undoLike(strName: string, strHost: string, x: any, y: any) {
     },
   };
   const headers = await signHeaders(res, strName, strHost, strInbox);
-  await postInbox(strInbox, res, headers);
+  await postActivity(strInbox, res, headers);
 }
 
 async function announce(strName: string, strHost: string, x: any, y: any) {
@@ -243,7 +254,7 @@ async function announce(strName: string, strHost: string, x: any, y: any) {
     object: x.id,
   };
   const headers = await signHeaders(res, strName, strHost, strInbox);
-  await postInbox(strInbox, res, headers);
+  await postActivity(strInbox, res, headers);
 }
 
 async function undoAnnounce(strName: string, strHost: string, x: any, y: any) {
@@ -260,7 +271,7 @@ async function undoAnnounce(strName: string, strHost: string, x: any, y: any) {
     },
   };
   const headers = await signHeaders(res, strName, strHost, strInbox);
-  await postInbox(strInbox, res, headers);
+  await postActivity(strInbox, res, headers);
 }
 
 async function createNote(strName: string, strHost: string, x: any, y: string) {
@@ -287,7 +298,7 @@ async function createNote(strName: string, strHost: string, x: any, y: string) {
     },
   };
   const headers = await signHeaders(res, strName, strHost, strInbox);
-  await postInbox(strInbox, res, headers);
+  await postActivity(strInbox, res, headers);
 }
 
 async function createNoteMention(strName: string, strHost: string, x: any, y: any, z: string) {
@@ -321,7 +332,7 @@ async function createNoteMention(strName: string, strHost: string, x: any, y: an
     },
   };
   const headers = await signHeaders(res, strName, strHost, strInbox);
-  await postInbox(strInbox, res, headers);
+  await postActivity(strInbox, res, headers);
 }
 
 async function createNoteHashtag(strName: string, strHost: string, x: any, y: string, z: string) {
@@ -354,7 +365,7 @@ async function createNoteHashtag(strName: string, strHost: string, x: any, y: st
     },
   };
   const headers = await signHeaders(res, strName, strHost, strInbox);
-  await postInbox(strInbox, res, headers);
+  await postActivity(strInbox, res, headers);
 }
 
 async function deleteNote(strName: string, strHost: string, x: any, y: string) {
@@ -371,20 +382,37 @@ async function deleteNote(strName: string, strHost: string, x: any, y: string) {
     },
   };
   const headers = await signHeaders(res, strName, strHost, strInbox);
-  await postInbox(strInbox, res, headers);
+  await postActivity(strInbox, res, headers);
 }
 
-app.get("/", (c) => c.text("Matchbox: ActivityPub@Hono"));
+app.get(
+  "/",
+  (c) =>
+    c.text("Matchbox: ActivityPub@Hono", 200, {
+      "Content-Type": "text/plain; charset=UTF-8",
+      "Cache-Control": `public, max-age=${CONFIG.maxAge}, must-revalidate`,
+      "Vary": "Accept, Accept-Encoding",
+    }),
+);
 
 app.get("/u/:strName", (c) => {
   const strName = c.req.param("strName");
-  const strHost = new URL(c.req.url).hostname;
+  const strHost = new URL(CONFIG.origin).hostname;
   if (strName !== CONFIG.preferredUsername) return c.notFound();
-  if (!c.req.header("Accept").includes("application/activity+json")) {
-    return c.text(`${strName}: ${CONFIG.name}`);
+  if (!c.req.header("Accept")?.includes("application/activity+json")) {
+    return c.text(`${strName}: ${CONFIG.name}`, 200, {
+      "Content-Type": "text/plain; charset=UTF-8",
+      "Cache-Control": `public, max-age=${CONFIG.maxAge}, must-revalidate`,
+      "Vary": "Accept, Accept-Encoding",
+    });
   }
   const r = {
-    "@context": ["https://www.w3.org/ns/activitystreams", "https://w3id.org/security/v1"],
+    "@context": [
+      "https://www.w3.org/ns/activitystreams",
+      "https://w3id.org/security/v1",
+      "https://w3id.org/security",
+      "https://w3id.org/security/suites/jws-2020/v1",
+    ],
     id: `https://${strHost}/u/${strName}`,
     type: "Person",
     inbox: `https://${strHost}/u/${strName}/inbox`,
@@ -393,14 +421,20 @@ app.get("/u/:strName", (c) => {
     followers: `https://${strHost}/u/${strName}/followers`,
     preferredUsername: strName,
     name: CONFIG.name,
-    summary: `<p>0.4.0</p>`,
+    summary: `<p>0.5.0</p>`,
     url: `https://${strHost}/u/${strName}`,
     publicKey: {
-      id: `https://${strHost}/u/${strName}`,
+      id: `https://${strHost}/u/${strName}#Key`,
       type: "Key",
       owner: `https://${strHost}/u/${strName}`,
-      publicKeyPem: public_key_pem,
+      publicKeyPem,
     },
+    verificationMethod: [{
+      id: `https://${strHost}/u/${strName}#Key`,
+      type: "JsonWebKey2020",
+      controller: `https://${strHost}/u/${strName}`,
+      publicKeyJwk,
+    }],
     icon: {
       type: "Image",
       mediaType: "image/png",
@@ -412,34 +446,39 @@ app.get("/u/:strName", (c) => {
       url: `https://${strHost}/public/${strName}s.png`,
     },
   };
-  return c.json(r, 200, { "Content-Type": "activity+json" });
+  return c.json(r, 200, {
+    "Content-Type": "application/activity+json",
+    "Access-Control-Allow-Origin": "*",
+    "Cache-Control": `public, max-age=${CONFIG.maxAge}, must-revalidate`,
+    "Vary": "Accept, Accept-Encoding",
+  });
 });
 
 app.get("/u/:strName/inbox", (c) => c.body(null, 405));
 app.post("/u/:strName/inbox", async (c) => {
   const strName = c.req.param("strName");
-  const strHost = new URL(c.req.url).hostname;
+  const strHost = new URL(CONFIG.origin).hostname;
   if (strName !== CONFIG.preferredUsername) return c.notFound();
-  if (!c.req.header("Content-Type").includes("application/activity+json")) return c.body(null, 400);
-  const y = await c.req.json<any>();
+  if (!c.req.header("Content-Type")?.includes("application/activity+json")) return c.body(null, 400);
+  const y = await c.req.json();
   if (new URL(y.actor).protocol !== "https:") return c.body(null, 400);
   console.log(y.id, y.type);
-  const x = await getInbox(y.actor);
+  const x = await getActivity(y.actor, strHost);
   if (!x) return c.body(null, 500);
   if (y.type === "Follow") {
     await acceptFollow(strName, strHost, x, y);
     return c.body(null);
   }
-  if (y.type === "Like" || y.type === "Announce") return c.body(null);
   if (y.type === "Undo") {
     const z = y.object;
     if (z.type === "Follow") {
       await acceptFollow(strName, strHost, x, z);
       return c.body(null);
     }
-    if (z.type === "Like" || z.type === "Announce") return c.body(null);
+    if (z.type === "Accept" || z.type === "Like" || z.type === "Announce") return c.body(null);
   }
-  if (y.type === "Accept" || y.type === "Reject") return c.body(null);
+  if (y.type === "Accept" || y.type === "Reject" || y.type === "Add") return c.body(null);
+  if (y.type === "Remove" || y.type === "Like" || y.type === "Announce") return c.body(null);
   if (y.type === "Create" || y.type === "Update" || y.type === "Delete") return c.body(null);
   return c.body(null, 500);
 });
@@ -447,55 +486,70 @@ app.post("/u/:strName/inbox", async (c) => {
 app.post("/u/:strName/outbox", (c) => c.body(null, 405));
 app.get("/u/:strName/outbox", (c) => {
   const strName = c.req.param("strName");
-  const strHost = new URL(c.req.url).hostname;
+  const strHost = new URL(CONFIG.origin).hostname;
   if (strName !== CONFIG.preferredUsername) return c.notFound();
-  if (!c.req.header("Accept").includes("application/activity+json")) return c.body(null, 400);
+  if (!c.req.header("Accept")?.includes("application/activity+json")) return c.body(null, 400);
   const r = {
     "@context": "https://www.w3.org/ns/activitystreams",
     id: `https://${strHost}/u/${strName}/outbox`,
     type: "OrderedCollection",
     totalItems: 0,
   };
-  return c.json(r, 200, { "Content-Type": "activity+json" });
+  return c.json(r, 200, {
+    "Content-Type": "application/activity+json",
+    "Access-Control-Allow-Origin": "*",
+    "Cache-Control": `public, max-age=${CONFIG.maxAge}, must-revalidate`,
+    "Vary": "Accept, Accept-Encoding",
+  });
 });
 
 app.get("/u/:strName/following", (c) => {
   const strName = c.req.param("strName");
-  const strHost = new URL(c.req.url).hostname;
+  const strHost = new URL(CONFIG.origin).hostname;
   if (strName !== CONFIG.preferredUsername) return c.notFound();
-  if (!c.req.header("Accept").includes("application/activity+json")) return c.body(null, 400);
+  if (!c.req.header("Accept")?.includes("application/activity+json")) return c.body(null, 400);
   const r = {
     "@context": "https://www.w3.org/ns/activitystreams",
     id: `https://${strHost}/u/${strName}/following`,
     type: "OrderedCollection",
     totalItems: 0,
   };
-  return c.json(r, 200, { "Content-Type": "activity+json" });
+  return c.json(r, 200, {
+    "Content-Type": "application/activity+json",
+    "Access-Control-Allow-Origin": "*",
+    "Cache-Control": `public, max-age=${CONFIG.maxAge}, must-revalidate`,
+    "Vary": "Accept, Accept-Encoding",
+  });
 });
 
 app.get("/u/:strName/followers", (c) => {
   const strName = c.req.param("strName");
-  const strHost = new URL(c.req.url).hostname;
+  const strHost = new URL(CONFIG.origin).hostname;
   if (strName !== CONFIG.preferredUsername) return c.notFound();
-  if (!c.req.header("Accept").includes("application/activity+json")) return c.body(null, 400);
+  if (!c.req.header("Accept")?.includes("application/activity+json")) return c.body(null, 400);
   const r = {
     "@context": "https://www.w3.org/ns/activitystreams",
     id: `https://${strHost}/u/${strName}/followers`,
     type: "OrderedCollection",
     totalItems: 0,
   };
-  return c.json(r, 200, { "Content-Type": "activity+json" });
+  return c.json(r, 200, {
+    "Content-Type": "application/activity+json",
+    "Access-Control-Allow-Origin": "*",
+    "Cache-Control": `public, max-age=${CONFIG.maxAge}, must-revalidate`,
+    "Vary": "Accept, Accept-Encoding",
+  });
 });
 
 app.post("/s/:strSecret/u/:strName", async (c) => {
   const strName = c.req.param("strName");
-  const strHost = new URL(c.req.url).hostname;
+  const strHost = new URL(CONFIG.origin).hostname;
   if (strName !== CONFIG.preferredUsername) return c.notFound();
   if (!c.req.param("strSecret") || c.req.param("strSecret") === "-") return c.notFound();
   if (c.req.param("strSecret") !== ENV.SECRET) return c.notFound();
   if (!c.req.query("id") || !c.req.query("type")) return c.body(null, 400);
-  if (new URL(c.req.query("id")).protocol !== "https:") return c.body(null, 400);
-  const x = await getInbox(c.req.query("id"));
+  if (new URL(c.req.query("id") || "").protocol !== "https:") return c.body(null, 400);
+  const x = await getActivity(c.req.query("id") || "", strHost);
   if (!x) return c.body(null, 500);
   const t = c.req.query("type");
   if (t === "type") {
@@ -511,52 +565,52 @@ app.post("/s/:strSecret/u/:strName", async (c) => {
     return c.body(null);
   }
   if (t === "like") {
-    const y = await getInbox(x.attributedTo);
+    const y = await getActivity(x.attributedTo, strHost);
     if (!y) return c.body(null, 500);
     await like(strName, strHost, x, y);
     return c.body(null);
   }
   if (t === "undo_like") {
-    const y = await getInbox(x.attributedTo);
+    const y = await getActivity(x.attributedTo, strHost);
     if (!y) return c.body(null, 500);
     await undoLike(strName, strHost, x, y);
     return c.body(null);
   }
   if (t === "announce") {
-    const y = await getInbox(x.attributedTo);
+    const y = await getActivity(x.attributedTo, strHost);
     if (!y) return c.body(null, 500);
     await announce(strName, strHost, x, y);
     return c.body(null);
   }
   if (t === "undo_announce") {
-    const y = await getInbox(x.attributedTo);
+    const y = await getActivity(x.attributedTo, strHost);
     if (!y) return c.body(null, 500);
     await undoAnnounce(strName, strHost, x, y);
     return c.body(null);
   }
   if (t === "create_note") {
-    const y = c.req.query("url");
+    const y = c.req.query("url") || "";
     if (new URL(y).protocol !== "https:") return c.body(null, 400);
     await createNote(strName, strHost, x, y);
     return c.body(null);
   }
   if (t === "create_note_mention") {
-    const y = await getInbox(x.attributedTo);
+    const y = await getActivity(x.attributedTo, strHost);
     if (!y) return c.body(null, 500);
-    const z = c.req.query("url");
+    const z = c.req.query("url") || "";
     if (new URL(z).protocol !== "https:") return c.body(null, 400);
     await createNoteMention(strName, strHost, x, y, z);
     return c.body(null);
   }
   if (t === "create_note_hashtag") {
-    const y = c.req.query("url");
+    const y = c.req.query("url") || "";
     if (new URL(y).protocol !== "https:") return c.body(null, 400);
-    const z = c.req.query("tag");
+    const z = c.req.query("tag") || "";
     await createNoteHashtag(strName, strHost, x, y, z);
     return c.body(null);
   }
   if (t === "delete_note") {
-    const y = c.req.query("url");
+    const y = c.req.query("url") || "";
     if (new URL(y).protocol !== "https:") return c.body(null, 400);
     await deleteNote(strName, strHost, x, y);
     return c.body(null);
@@ -565,7 +619,7 @@ app.post("/s/:strSecret/u/:strName", async (c) => {
 });
 
 app.get("/.well-known/nodeinfo", (c) => {
-  const strHost = new URL(c.req.url).hostname;
+  const strHost = new URL(CONFIG.origin).hostname;
   const r = {
     links: [
       {
@@ -578,16 +632,30 @@ app.get("/.well-known/nodeinfo", (c) => {
       },
     ],
   };
-  return c.json(r);
+  return c.json(r, 200, {
+    "Content-Type": "application/json",
+    "Access-Control-Allow-Origin": "*",
+    "Cache-Control": `public, max-age=${CONFIG.maxAge}, must-revalidate`,
+    "Vary": "Accept, Accept-Encoding",
+  });
 });
 
 app.get("/.well-known/webfinger", (c) => {
   const strName = CONFIG.preferredUsername;
-  const strHost = new URL(c.req.url).hostname;
-  if (c.req.query("resource") !== `acct:${strName}@${strHost}`) return c.notFound();
+  const strHost = new URL(CONFIG.origin).hostname;
+  const strResource = c.req.query("resource");
+  let boolResource = false;
+  if (strResource === `acct:${strName}@${strHost}`) boolResource = true;
+  if (strResource === `mailto:${strName}@${strHost}`) boolResource = true;
+  if (strResource === `https://${strHost}/@${strName}`) boolResource = true;
+  if (strResource === `https://${strHost}/u/${strName}`) boolResource = true;
+  if (strResource === `https://${strHost}/user/${strName}`) boolResource = true;
+  if (strResource === `https://${strHost}/users/${strName}`) boolResource = true;
+  if (!boolResource) return c.notFound();
   const r = {
     subject: `acct:${strName}@${strHost}`,
     aliases: [
+      `mailto:${strName}@${strHost}`,
       `https://${strHost}/@${strName}`,
       `https://${strHost}/u/${strName}`,
       `https://${strHost}/user/${strName}`,
@@ -599,9 +667,24 @@ app.get("/.well-known/webfinger", (c) => {
         type: "application/activity+json",
         href: `https://${strHost}/u/${strName}`,
       },
+      {
+        rel: "http://webfinger.net/rel/avatar",
+        type: "text/png",
+        href: `https://${strHost}/public/${strName}u.png`,
+      },
+      {
+        rel: "http://webfinger.net/rel/profile-page",
+        type: "text/plain",
+        href: `https://${strHost}/u/${strName}`,
+      },
     ],
   };
-  return c.json(r, 200, { "Content-Type": "jrd+json" });
+  return c.json(r, 200, {
+    "Content-Type": "application/jrd+json",
+    "Access-Control-Allow-Origin": "*",
+    "Cache-Control": `public, max-age=${CONFIG.maxAge}, must-revalidate`,
+    "Vary": "Accept, Accept-Encoding",
+  });
 });
 
 app.get("/s", (c) => c.notFound());
