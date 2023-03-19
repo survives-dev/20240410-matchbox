@@ -1,12 +1,11 @@
-config.json
-config.txt
-
 /node_modules
 /vendor
 
 tmp/
 
 .env
+config.json
+config.txt
 id_ecdsa
 id_ecdsa.pub
 id_ed25519
