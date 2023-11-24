@@ -3,7 +3,7 @@ services:
   app:
     build: .
     volumes:
-      - ./data:/workspace/data
+      - ./data:/app/data
     ports:
       - ${PORT:-8080}:${PORT:-8080}
     env_file:

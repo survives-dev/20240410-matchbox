@@ -36,5 +36,5 @@ else
 fi
 echo "PRIVATE_KEY=\"$(cat id_rsa | sed -z 's/\n/\\n/g')\"" >> .env
 
-docker run -d -v "$PWD/data:/workspace/data" -p 8080:8080 --env-file=.env matchbox
+docker run -d -v "$PWD/data:/app/data" -p 8080:8080 --env-file=.env matchbox
 cd ..
