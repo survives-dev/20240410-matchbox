@@ -1,23 +1,19 @@
 {
   "importMap": "import_map.json",
+  "exclude": ["vendor/"],
   "lint": {
-    "files": {
-      "exclude": ["vendor/"]
-    },
     "rules": {
       "exclude": ["no-explicit-any"]
     }
   },
   "fmt": {
-    "files": {
-      "exclude": ["vendor/"]
-    },
-    "options": {
-      "lineWidth": 120
-    }
+    "lineWidth": 120
   },
+  "vendor": true,
   "tasks": {
-    "start": "deno run --allow-read=. --allow-net --allow-env index.ts",
-    "test": "deno lint && deno fmt && deno test -A && deno bench -A"
+    "start": "deno run --allow-read=.env,.env.defaults,.env.example,data,public --allow-net --allow-env index.ts",
+    "dev": "deno run --allow-read=.env,.env.defaults,.env.example,data,public --allow-net --allow-env --watch index.ts",
+    "test": "deno lint && deno fmt && deno test -A && deno bench -A",
+    "clean": "rm -rf /tmp/deno_cache"
   }
 }

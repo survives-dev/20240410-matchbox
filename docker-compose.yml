@@ -1,0 +1,10 @@
+version: "3"
+services:
+  app:
+    build: .
+    volumes:
+      - ./data:/workspace/data
+    ports:
+      - ${PORT:-8080}:${PORT:-8080}
+    env_file:
+      - .env

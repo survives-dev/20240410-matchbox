@@ -1,0 +1,10 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "build",
+      "type": "shell",
+      "command": "deno run --allow-read=.env,.env.defaults,.env.example,data,public --allow-net --allow-env --watch index.ts"
+    }
+  ]
+}

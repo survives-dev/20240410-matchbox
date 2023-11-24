@@ -1,10 +1,9 @@
 {
   "imports": {
-    "dotenv/load": "https://deno.land/std@0.180.0/dotenv/load.ts",
-    "hono": "https://deno.land/x/hono@v3.1.1/mod.ts",
-    "hono/basic-auth": "https://deno.land/x/hono@v3.1.1/middleware.ts",
-    "hono/serve-static": "https://deno.land/x/hono@v3.1.1/middleware.ts",
-    "http/server": "https://deno.land/std@0.180.0/http/server.ts",
-    "testing/asserts": "https://deno.land/std@0.180.0/testing/asserts.ts"
+    "dotenv/load": "https://deno.land/std@0.208.0/dotenv/load.ts",
+    "hono": "https://deno.land/x/hono@v3.10.2/mod.ts",
+    "hono/deno": "https://deno.land/x/hono@v3.10.2/adapter/deno/index.ts",
+    "hono/middleware": "https://deno.land/x/hono@v3.10.2/middleware.ts",
+    "testing/asserts": "https://deno.land/std@0.208.0/testing/asserts.ts"
   }
 }

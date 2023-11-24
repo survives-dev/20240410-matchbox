@@ -1,7 +1,17 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-echo "$(cat /proc/sys/kernel/random/uuid)$(cat /proc/sys/kernel/random/uuid)" | tr -d '-' >> secret.txt
-echo "SECRET=$(tail -n1 secret.txt)" > .env
+set -e
+
+if [ "$1" = 'https://example' ]; then
+  echo 'This is an example.'
+elif [ "$1" = 'https://www.example.com' ]; then
+  echo 'This is an example.'
+elif [ $# -gt 0 ]; then
+  cat data/config.json.example | sed "s|https://example|$1|g" | sed 's|86400|null|g' > data/config.json
+fi
+
+head -c36 /dev/urandom | base64 | sed s/\+/-/g | sed 's/\//_/g' >> secret.txt
+echo "SECRET=$(tail -1 secret.txt)" > .env
 if command -v openssl >/dev/null; then
   if [ ! -f id_rsa ]; then
     openssl genpkey -algorithm rsa -pkeyopt rsa_keygen_bits:4096 -out id_rsa

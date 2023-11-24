@@ -1,5 +1,2 @@
 User-agent: *
-Allow: /nodeinfo/
-Allow: /public/
-Allow: /u/
 Disallow: /s/

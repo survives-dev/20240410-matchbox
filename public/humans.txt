@@ -1,0 +1,10 @@
+ _______________________________________ 
+/ Cloudflare Workers, Fastly Compute,   \
+| Deno, Bun, Vercel, Netlify, Lagon,    |
+\ AWS Lambda, Lambda@Edge, and Node.js. /
+ --------------------------------------- 
+        \   ^__^
+         \  (oo)\_______
+            (__)\       )\/\
+                ||----w |
+                ||     ||

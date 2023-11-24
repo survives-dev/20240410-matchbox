@@ -1,8 +1,7 @@
 import "dotenv/load";
-import { serve } from "http/server";
 import { Hono } from "hono";
-import { basicAuth } from "hono/basic-auth";
-import { serveStatic } from "hono/serve-static";
+import { serveStatic } from "hono/deno";
+import { basicAuth, cache, compress, cors, etag } from "hono/middleware";
 
 const ENV = {
   HOSTS: Deno.env.get("HOSTS"),
@@ -15,12 +14,66 @@ const ENV = {
   PRIVATE_KEY: Deno.env.get("PRIVATE_KEY"),
 } as { [key: string]: string };
 
+const PRIVATE_KEY = await importPrivateKey(ENV.PRIVATE_KEY);
+const PUBLIC_KEY = await privateKeyToPublicKey(PRIVATE_KEY);
+const publicKeyPem = await exportPublicKey(PUBLIC_KEY);
+const publicKeyJwk = await crypto.subtle.exportKey("jwk", PUBLIC_KEY);
+const configJsonFile = ENV.CONFIG_JSON || await Deno.readTextFile("data/config.json");
+const CONFIG = JSON.parse(configJsonFile);
+
 const app = new Hono();
-app.use("/public/*", serveStatic({ root: "./public/" }));
-app.use("/nodeinfo/*", serveStatic({ root: "./public/" }));
-app.use("/favicon.ico", serveStatic({ path: "./public/favicon.ico" }));
-app.use("/robots.txt", serveStatic({ path: "./public/robots.txt" }));
-app.use("/s/*", async (c, next) => {
+app.use("*", async (c, next) => {
+  await next();
+  c.res.headers.append("Vary", "Accept, Accept-Encoding");
+});
+if (CONFIG.maxAge === 0) {
+  app.use("/", async (c, next) => {
+    await next();
+    c.res.headers.append("Cache-Control", "public, max-age=0, must-revalidate");
+  });
+  app.use("/u/:param", async (c, next) => {
+    await next();
+    c.res.headers.append("Cache-Control", "public, max-age=0, must-revalidate");
+  });
+  app.use("/.well-known/*", async (c, next) => {
+    await next();
+    c.res.headers.append("Cache-Control", "public, max-age=0, must-revalidate");
+  });
+} else if (!(CONFIG.maxAge === null || CONFIG.maxAge === undefined)) {
+  app.use(
+    "/",
+    cache({
+      cacheName: "matchbox",
+      cacheControl: `public, max-age=${Number(CONFIG.maxAge) || 0}, must-revalidate`,
+      wait: true,
+    }),
+  );
+  app.use(
+    "/u/:param",
+    cache({
+      cacheName: "matchbox",
+      cacheControl: `public, max-age=${Number(CONFIG.maxAge) || 0}, must-revalidate`,
+      wait: true,
+    }),
+  );
+  app.use(
+    "/.well-known/*",
+    cache({
+      cacheName: "matchbox",
+      cacheControl: `public, max-age=${Number(CONFIG.maxAge) || 0}, must-revalidate`,
+      wait: true,
+    }),
+  );
+}
+app.use("/", compress(), cors());
+app.use("/u/:param", compress(), cors());
+app.use("/.well-known/*", compress(), cors());
+app.use("/public/*", etag(), serveStatic({ root: "./public/" }));
+app.use("/nodeinfo/*", cors(), etag(), serveStatic({ root: "./public/" }));
+app.use("/favicon.ico", etag(), serveStatic({ path: "./public/favicon.ico" }));
+app.use("/humans.txt", cors(), etag(), serveStatic({ path: "./public/humans.txt" }));
+app.use("/robots.txt", cors(), etag(), serveStatic({ path: "./public/robots.txt" }));
+app.use("/s/:param/u/:param", async (c, next) => {
   if (ENV.ENABLE_BASIC_AUTH === "true" && c.req.method === "POST") {
     const auth = basicAuth({
       username: ENV.BASIC_AUTH_USERNAME,
@@ -31,20 +84,6 @@ app.use("/s/*", async (c, next) => {
     await next();
   }
 });
-app.onError((_err, c) => c.body(null, 500));
-
-const PRIVATE_KEY = await importPrivateKey(ENV.PRIVATE_KEY);
-const PUBLIC_KEY = await privateKeyToPublicKey(PRIVATE_KEY);
-const publicKeyPem = await exportPublicKey(PUBLIC_KEY);
-const publicKeyJwk = await crypto.subtle.exportKey("jwk", PUBLIC_KEY);
-const configJsonFile = ENV.CONFIG_JSON || await Deno.readTextFile("config.json");
-const configJson = JSON.parse(configJsonFile);
-const CONFIG = {
-  origin: configJson.origin || "https://localhost",
-  preferredUsername: configJson.preferredUsername || "a",
-  name: configJson.name || "Anonymous",
-  maxAge: configJson.maxAge || 0,
-};
 
 function stob(s: string) {
   return Uint8Array.from(s, (c) => c.charCodeAt(0));
@@ -55,15 +94,17 @@ function btos(b: ArrayBuffer) {
 }
 
 async function importPrivateKey(pem: string) {
-  const pemHeader = "-----BEGIN PRIVATE KEY-----";
-  const pemFooter = "-----END PRIVATE KEY-----";
-  if (pem.startsWith('"')) pem = pem.slice(1);
-  if (pem.endsWith('"')) pem = pem.slice(0, -1);
-  pem = pem.split("\\n").join("");
-  pem = pem.split("\n").join("");
-  const pemContents = pem.substring(pemHeader.length, pem.length - pemFooter.length);
-  const der = stob(atob(pemContents));
-  const r = await crypto.subtle.importKey(
+  const header = "-----BEGIN PRIVATE KEY-----";
+  const footer = "-----END PRIVATE KEY-----";
+  let b64 = pem;
+  b64 = b64.split("\\n").join("");
+  b64 = b64.split("\n").join("");
+  if (b64.startsWith('"')) b64 = b64.slice(1);
+  if (b64.endsWith('"')) b64 = b64.slice(0, -1);
+  if (b64.startsWith(header)) b64 = b64.slice(header.length);
+  if (b64.endsWith(footer)) b64 = b64.slice(0, -1 * footer.length);
+  const der = stob(atob(b64));
+  const result = await crypto.subtle.importKey(
     "pkcs8",
     der,
     {
@@ -73,7 +114,7 @@ async function importPrivateKey(pem: string) {
     true,
     ["sign"],
   );
-  return r;
+  return result;
 }
 
 async function privateKeyToPublicKey(key: CryptoKey) {
@@ -86,7 +127,7 @@ async function privateKeyToPublicKey(key: CryptoKey) {
   delete jwk.qi;
   delete jwk.oth;
   jwk.key_ops = ["verify"];
-  const r = await crypto.subtle.importKey(
+  const result = await crypto.subtle.importKey(
     "jwk",
     jwk,
     {
@@ -96,154 +137,176 @@ async function privateKeyToPublicKey(key: CryptoKey) {
     true,
     ["verify"],
   );
-  return r;
+  return result;
 }
 
 async function exportPublicKey(key: CryptoKey) {
   const der = await crypto.subtle.exportKey("spki", key);
-  let pemContents = btoa(btos(der));
+  let b64 = btoa(btos(der));
   let pem = "-----BEGIN PUBLIC KEY-----\n";
-  while (pemContents.length > 0) {
-    pem += pemContents.substring(0, 64) + "\n";
-    pemContents = pemContents.substring(64);
+  while (b64.length > 0) {
+    pem += b64.substring(0, 64) + "\n";
+    b64 = b64.substring(64);
   }
   pem += "-----END PUBLIC KEY-----\n";
   return pem;
 }
 
 function talkScript(req: string) {
-  const strHost = new URL(req).hostname;
-  return `<p><a href="https://${strHost}/" rel="nofollow noopener noreferrer" target="_blank">${strHost}</a></p>`;
+  return [
+    "<p>",
+    `<a href="https://${new URL(req).hostname}/" rel="nofollow noopener noreferrer" target="_blank">`,
+    new URL(req).hostname,
+    "</a>",
+    "</p>",
+  ].join("");
 }
 
-async function getActivity(req: string, strHost: string) {
-  console.log(req);
-  const headers = {
-    Accept: "application/activity+json",
-    "Accept-Encoding": "gzip",
-    "User-Agent": `Matchbox/0.5.0 (+https://${strHost}/)`,
-  };
-  const res = await fetch(req, { method: "GET", headers });
-  return res.json();
-}
-
-async function postActivity(req: string, data: any, headers: { [key: string]: string }) {
-  console.log(req, data);
-  await fetch(req, { method: "POST", body: JSON.stringify(data), headers });
-}
-
-async function signHeaders(res: any, strName: string, strHost: string, strInbox: string) {
+async function getActivity(strName: string, strHost: string, req: string) {
   const strTime = new Date().toUTCString();
-  const s = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(res)));
-  const s256 = btoa(btos(s));
   const sig = await crypto.subtle.sign(
     "RSASSA-PKCS1-v1_5",
     PRIVATE_KEY,
     stob(
-      `(request-target): post ${new URL(strInbox).pathname}\n` +
-        `host: ${new URL(strInbox).hostname}\n` +
-        `date: ${strTime}\n` +
-        `digest: SHA-256=${s256}`,
+      [
+        `(request-target): get ${new URL(req).pathname}`,
+        `host: ${new URL(req).hostname}`,
+        `date: ${strTime}`,
+      ].join("\n"),
     ),
   );
   const b64 = btoa(btos(sig));
   const headers = {
-    Host: new URL(strInbox).hostname,
+    Host: new URL(req).hostname,
     Date: strTime,
-    Digest: `SHA-256=${s256}`,
-    Signature: `keyId="https://${strHost}/u/${strName}#Key",` +
-      `algorithm="rsa-sha256",` +
-      `headers="(request-target) host date digest",` +
+    Signature: [
+      `keyId="https://${strHost}/u/${strName}#Key"`,
+      'algorithm="rsa-sha256"',
+      'headers="(request-target) host date"',
       `signature="${b64}"`,
+    ].join(),
     Accept: "application/activity+json",
-    "Accept-Encoding": "gzip",
-    "Content-Type": "application/activity+json",
-    "User-Agent": `Matchbox/0.5.0 (+https://${strHost}/)`,
+    "Accept-Encoding": "identity",
+    "Cache-Control": "no-cache",
+    "User-Agent": `Matchbox/0.6.0 (+https://${strHost}/)`,
   };
-  return headers;
+  const res = await fetch(req, { method: "GET", headers });
+  console.log(`GET ${req} ${res.status}`);
+  return res.json();
 }
 
-async function acceptFollow(strName: string, strHost: string, x: any, y: any) {
+async function postActivity(strName: string, strHost: string, req: string, x: { [key: string]: any }) {
+  const strTime = new Date().toUTCString();
+  const body = JSON.stringify(x);
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(body));
+  const s256 = btoa(btos(digest));
+  const sig = await crypto.subtle.sign(
+    "RSASSA-PKCS1-v1_5",
+    PRIVATE_KEY,
+    stob(
+      [
+        `(request-target): post ${new URL(req).pathname}`,
+        `host: ${new URL(req).hostname}`,
+        `date: ${strTime}`,
+        `digest: SHA-256=${s256}`,
+      ].join("\n"),
+    ),
+  );
+  const b64 = btoa(btos(sig));
+  const headers = {
+    Host: new URL(req).hostname,
+    Date: strTime,
+    Digest: `SHA-256=${s256}`,
+    Signature: [
+      `keyId="https://${strHost}/u/${strName}#Key"`,
+      'algorithm="rsa-sha256"',
+      'headers="(request-target) host date digest"',
+      `signature="${b64}"`,
+    ].join(),
+    Accept: "application/json",
+    "Accept-Encoding": "gzip",
+    "Cache-Control": "max-age=0",
+    "Content-Type": "application/activity+json",
+    "User-Agent": `Matchbox/0.6.0 (+https://${strHost}/)`,
+  };
+  console.log(`POST ${req} ${body}`);
+  await fetch(req, { method: "POST", body, headers });
+}
+
+async function acceptFollow(strName: string, strHost: string, x: { [key: string]: any }, y: { [key: string]: any }) {
   const strId = crypto.randomUUID();
-  const strInbox = x.inbox;
-  const res = {
+  const body = {
     "@context": "https://www.w3.org/ns/activitystreams",
     id: `https://${strHost}/u/${strName}/s/${strId}`,
     type: "Accept",
     actor: `https://${strHost}/u/${strName}`,
     object: y,
   };
-  const headers = await signHeaders(res, strName, strHost, strInbox);
-  await postActivity(strInbox, res, headers);
+  await postActivity(strName, strHost, x.inbox, body);
 }
 
-async function follow(strName: string, strHost: string, x: any) {
+async function follow(strName: string, strHost: string, x: { [key: string]: any }) {
   const strId = crypto.randomUUID();
-  const strInbox = x.inbox;
-  const res = {
+  const body = {
     "@context": "https://www.w3.org/ns/activitystreams",
     id: `https://${strHost}/u/${strName}/s/${strId}`,
     type: "Follow",
     actor: `https://${strHost}/u/${strName}`,
     object: x.id,
   };
-  const headers = await signHeaders(res, strName, strHost, strInbox);
-  await postActivity(strInbox, res, headers);
+  await postActivity(strName, strHost, x.inbox, body);
 }
 
-async function undoFollow(strName: string, strHost: string, x: any) {
+async function undoFollow(strName: string, strHost: string, x: { [key: string]: any }) {
   const strId = crypto.randomUUID();
-  const strInbox = x.inbox;
-  const res = {
+  const body = {
     "@context": "https://www.w3.org/ns/activitystreams",
-    id: `https://${strHost}/u/${strName}/s/${strId}`,
+    id: `https://${strHost}/u/${strName}/s/${strId}#Undo`,
     type: "Undo",
     actor: `https://${strHost}/u/${strName}`,
     object: {
+      id: `https://${strHost}/u/${strName}/s/${strId}`,
       type: "Follow",
+      actor: `https://${strHost}/u/${strName}`,
       object: x.id,
     },
   };
-  const headers = await signHeaders(res, strName, strHost, strInbox);
-  await postActivity(strInbox, res, headers);
+  await postActivity(strName, strHost, x.inbox, body);
 }
 
-async function like(strName: string, strHost: string, x: any, y: any) {
+async function like(strName: string, strHost: string, x: { [key: string]: any }, y: { [key: string]: any }) {
   const strId = crypto.randomUUID();
-  const strInbox = y.inbox;
-  const res = {
+  const body = {
     "@context": "https://www.w3.org/ns/activitystreams",
     id: `https://${strHost}/u/${strName}/s/${strId}`,
     type: "Like",
     actor: `https://${strHost}/u/${strName}`,
     object: x.id,
   };
-  const headers = await signHeaders(res, strName, strHost, strInbox);
-  await postActivity(strInbox, res, headers);
+  await postActivity(strName, strHost, y.inbox, body);
 }
 
-async function undoLike(strName: string, strHost: string, x: any, y: any) {
+async function undoLike(strName: string, strHost: string, x: { [key: string]: any }, y: { [key: string]: any }) {
   const strId = crypto.randomUUID();
-  const strInbox = y.inbox;
-  const res = {
+  const body = {
     "@context": "https://www.w3.org/ns/activitystreams",
-    id: `https://${strHost}/u/${strName}/s/${strId}`,
+    id: `https://${strHost}/u/${strName}/s/${strId}#Undo`,
     type: "Undo",
     actor: `https://${strHost}/u/${strName}`,
     object: {
+      id: `https://${strHost}/u/${strName}/s/${strId}`,
       type: "Like",
+      actor: `https://${strHost}/u/${strName}`,
       object: x.id,
     },
   };
-  const headers = await signHeaders(res, strName, strHost, strInbox);
-  await postActivity(strInbox, res, headers);
+  await postActivity(strName, strHost, y.inbox, body);
 }
 
-async function announce(strName: string, strHost: string, x: any, y: any) {
+async function announce(strName: string, strHost: string, x: { [key: string]: any }, y: { [key: string]: any }) {
   const strId = crypto.randomUUID();
   const strTime = new Date().toISOString().substring(0, 19) + "Z";
-  const strInbox = y.inbox;
-  const res = {
+  const body = {
     "@context": "https://www.w3.org/ns/activitystreams",
     id: `https://${strHost}/u/${strName}/s/${strId}`,
     type: "Announce",
@@ -253,32 +316,30 @@ async function announce(strName: string, strHost: string, x: any, y: any) {
     cc: [`https://${strHost}/u/${strName}/followers`],
     object: x.id,
   };
-  const headers = await signHeaders(res, strName, strHost, strInbox);
-  await postActivity(strInbox, res, headers);
+  await postActivity(strName, strHost, y.inbox, body);
 }
 
-async function undoAnnounce(strName: string, strHost: string, x: any, y: any) {
+async function undoAnnounce(strName: string, strHost: string, x: { [key: string]: any }, y: { [key: string]: any }) {
   const strId = crypto.randomUUID();
-  const strInbox = y.inbox;
-  const res = {
+  const body = {
     "@context": "https://www.w3.org/ns/activitystreams",
-    id: `https://${strHost}/u/${strName}/s/${strId}`,
+    id: `https://${strHost}/u/${strName}/s/${strId}#Undo`,
     type: "Undo",
     actor: `https://${strHost}/u/${strName}`,
     object: {
+      id: `https://${strHost}/u/${strName}/s/${strId}`,
       type: "Announce",
+      actor: `https://${strHost}/u/${strName}`,
       object: x.id,
     },
   };
-  const headers = await signHeaders(res, strName, strHost, strInbox);
-  await postActivity(strInbox, res, headers);
+  await postActivity(strName, strHost, y.inbox, body);
 }
 
-async function createNote(strName: string, strHost: string, x: any, y: string) {
+async function createNote(strName: string, strHost: string, x: { [key: string]: any }, y: string) {
   const strId = crypto.randomUUID();
   const strTime = new Date().toISOString().substring(0, 19) + "Z";
-  const strInbox = x.inbox;
-  const res = {
+  const body = {
     "@context": "https://www.w3.org/ns/activitystreams",
     id: `https://${strHost}/u/${strName}/s/${strId}/activity`,
     type: "Create",
@@ -297,15 +358,19 @@ async function createNote(strName: string, strHost: string, x: any, y: string) {
       cc: [`https://${strHost}/u/${strName}/followers`],
     },
   };
-  const headers = await signHeaders(res, strName, strHost, strInbox);
-  await postActivity(strInbox, res, headers);
+  await postActivity(strName, strHost, x.inbox, body);
 }
 
-async function createNoteMention(strName: string, strHost: string, x: any, y: any, z: string) {
+async function createNoteMention(
+  strName: string,
+  strHost: string,
+  x: { [key: string]: any },
+  y: { [key: string]: any },
+  z: string,
+) {
   const strId = crypto.randomUUID();
   const strTime = new Date().toISOString().substring(0, 19) + "Z";
-  const strInbox = y.inbox;
-  const res = {
+  const body = {
     "@context": "https://www.w3.org/ns/activitystreams",
     id: `https://${strHost}/u/${strName}/s/${strId}/activity`,
     type: "Create",
@@ -326,20 +391,24 @@ async function createNoteMention(strName: string, strHost: string, x: any, y: an
       tag: [
         {
           type: "Mention",
-          name: `@{y.preferredUsername}@${new URL(strInbox).hostname}`,
+          name: `@${y.preferredUsername}@${new URL(y.inbox).hostname}`,
         },
       ],
     },
   };
-  const headers = await signHeaders(res, strName, strHost, strInbox);
-  await postActivity(strInbox, res, headers);
+  await postActivity(strName, strHost, y.inbox, body);
 }
 
-async function createNoteHashtag(strName: string, strHost: string, x: any, y: string, z: string) {
+async function createNoteHashtag(
+  strName: string,
+  strHost: string,
+  x: { [key: string]: any },
+  y: string,
+  z: string,
+) {
   const strId = crypto.randomUUID();
   const strTime = new Date().toISOString().substring(0, 19) + "Z";
-  const strInbox = x.inbox;
-  const res = {
+  const body = {
     "@context": ["https://www.w3.org/ns/activitystreams", { Hashtag: "as:Hashtag" }],
     id: `https://${strHost}/u/${strName}/s/${strId}/activity`,
     type: "Create",
@@ -364,14 +433,12 @@ async function createNoteHashtag(strName: string, strHost: string, x: any, y: st
       ],
     },
   };
-  const headers = await signHeaders(res, strName, strHost, strInbox);
-  await postActivity(strInbox, res, headers);
+  await postActivity(strName, strHost, x.inbox, body);
 }
 
-async function deleteNote(strName: string, strHost: string, x: any, y: string) {
+async function deleteNote(strName: string, strHost: string, x: { [key: string]: any }, y: string) {
   const strId = crypto.randomUUID();
-  const strInbox = x.inbox;
-  const res = {
+  const body = {
     "@context": "https://www.w3.org/ns/activitystreams",
     id: `https://${strHost}/u/${strName}/s/${strId}/activity`,
     type: "Delete",
@@ -379,39 +446,26 @@ async function deleteNote(strName: string, strHost: string, x: any, y: string) {
     object: {
       id: y,
       type: "Note",
+      attributedTo: `https://${strHost}/u/${strName}`,
     },
   };
-  const headers = await signHeaders(res, strName, strHost, strInbox);
-  await postActivity(strInbox, res, headers);
+  await postActivity(strName, strHost, x.inbox, body);
 }
 
-app.get(
-  "/",
-  (c) =>
-    c.text("Matchbox: ActivityPub@Hono", 200, {
-      "Content-Type": "text/plain; charset=UTF-8",
-      "Cache-Control": `public, max-age=${CONFIG.maxAge}, must-revalidate`,
-      "Vary": "Accept, Accept-Encoding",
-    }),
-);
+app.get("/", (c) => c.text("Matchbox: ActivityPub@Hono"));
 
 app.get("/u/:strName", (c) => {
   const strName = c.req.param("strName");
   const strHost = new URL(CONFIG.origin).hostname;
   if (strName !== CONFIG.preferredUsername) return c.notFound();
   if (!c.req.header("Accept")?.includes("application/activity+json")) {
-    return c.text(`${strName}: ${CONFIG.name}`, 200, {
-      "Content-Type": "text/plain; charset=UTF-8",
-      "Cache-Control": `public, max-age=${CONFIG.maxAge}, must-revalidate`,
-      "Vary": "Accept, Accept-Encoding",
-    });
+    return c.text(`${strName}: ${CONFIG.name}`);
   }
-  const r = {
+  const body = {
     "@context": [
       "https://www.w3.org/ns/activitystreams",
       "https://w3id.org/security/v1",
       "https://w3id.org/security",
-      "https://w3id.org/security/suites/jws-2020/v1",
     ],
     id: `https://${strHost}/u/${strName}`,
     type: "Person",
@@ -421,7 +475,7 @@ app.get("/u/:strName", (c) => {
     followers: `https://${strHost}/u/${strName}/followers`,
     preferredUsername: strName,
     name: CONFIG.name,
-    summary: `<p>0.5.0</p>`,
+    summary: "<p>0.6.0</p>",
     url: `https://${strHost}/u/${strName}`,
     publicKey: {
       id: `https://${strHost}/u/${strName}#Key`,
@@ -431,7 +485,7 @@ app.get("/u/:strName", (c) => {
     },
     verificationMethod: [{
       id: `https://${strHost}/u/${strName}#Key`,
-      type: "JsonWebKey2020",
+      type: "JsonWebKey",
       controller: `https://${strHost}/u/${strName}`,
       publicKeyJwk,
     }],
@@ -446,24 +500,26 @@ app.get("/u/:strName", (c) => {
       url: `https://${strHost}/public/${strName}s.png`,
     },
   };
-  return c.json(r, 200, {
-    "Content-Type": "application/activity+json",
-    "Access-Control-Allow-Origin": "*",
-    "Cache-Control": `public, max-age=${CONFIG.maxAge}, must-revalidate`,
-    "Vary": "Accept, Accept-Encoding",
-  });
+  return c.json(body, 200, { "Content-Type": "application/activity+json" });
 });
 
 app.get("/u/:strName/inbox", (c) => c.body(null, 405));
 app.post("/u/:strName/inbox", async (c) => {
   const strName = c.req.param("strName");
   const strHost = new URL(CONFIG.origin).hostname;
-  if (strName !== CONFIG.preferredUsername) return c.notFound();
-  if (!c.req.header("Content-Type")?.includes("application/activity+json")) return c.body(null, 400);
   const y = await c.req.json();
-  if (new URL(y.actor).protocol !== "https:") return c.body(null, 400);
-  console.log(y.id, y.type);
-  const x = await getActivity(y.actor, strHost);
+  const t = c.req.header("Content-Type");
+  let boolContentType = false;
+  console.log(`INBOX ${y.id} ${y.type}`);
+  if (strName !== CONFIG.preferredUsername) return c.notFound();
+  if (t?.includes("application/activity+json")) boolContentType = true;
+  if (t?.includes("application/ld+json")) boolContentType = true;
+  if (t?.includes('application/ld+json; profile="https://www.w3.org/ns/activitystreams"')) boolContentType = true;
+  if (t?.includes("application/json")) boolContentType = true;
+  if (!boolContentType) return c.body(null, 400);
+  if (!c.req.header("Digest") || !c.req.header("Signature")) return c.body(null, 400);
+  if (new URL(y.actor || "about:blank").protocol !== "https:") return c.body(null, 400);
+  const x = await getActivity(strName, strHost, y.actor);
   if (!x) return c.body(null, 500);
   if (y.type === "Follow") {
     await acceptFollow(strName, strHost, x, y);
@@ -489,18 +545,13 @@ app.get("/u/:strName/outbox", (c) => {
   const strHost = new URL(CONFIG.origin).hostname;
   if (strName !== CONFIG.preferredUsername) return c.notFound();
   if (!c.req.header("Accept")?.includes("application/activity+json")) return c.body(null, 400);
-  const r = {
+  const body = {
     "@context": "https://www.w3.org/ns/activitystreams",
     id: `https://${strHost}/u/${strName}/outbox`,
     type: "OrderedCollection",
     totalItems: 0,
   };
-  return c.json(r, 200, {
-    "Content-Type": "application/activity+json",
-    "Access-Control-Allow-Origin": "*",
-    "Cache-Control": `public, max-age=${CONFIG.maxAge}, must-revalidate`,
-    "Vary": "Accept, Accept-Encoding",
-  });
+  return c.json(body, 200, { "Content-Type": "application/activity+json" });
 });
 
 app.get("/u/:strName/following", (c) => {
@@ -508,18 +559,13 @@ app.get("/u/:strName/following", (c) => {
   const strHost = new URL(CONFIG.origin).hostname;
   if (strName !== CONFIG.preferredUsername) return c.notFound();
   if (!c.req.header("Accept")?.includes("application/activity+json")) return c.body(null, 400);
-  const r = {
+  const body = {
     "@context": "https://www.w3.org/ns/activitystreams",
     id: `https://${strHost}/u/${strName}/following`,
     type: "OrderedCollection",
     totalItems: 0,
   };
-  return c.json(r, 200, {
-    "Content-Type": "application/activity+json",
-    "Access-Control-Allow-Origin": "*",
-    "Cache-Control": `public, max-age=${CONFIG.maxAge}, must-revalidate`,
-    "Vary": "Accept, Accept-Encoding",
-  });
+  return c.json(body, 200, { "Content-Type": "application/activity+json" });
 });
 
 app.get("/u/:strName/followers", (c) => {
@@ -527,18 +573,13 @@ app.get("/u/:strName/followers", (c) => {
   const strHost = new URL(CONFIG.origin).hostname;
   if (strName !== CONFIG.preferredUsername) return c.notFound();
   if (!c.req.header("Accept")?.includes("application/activity+json")) return c.body(null, 400);
-  const r = {
+  const body = {
     "@context": "https://www.w3.org/ns/activitystreams",
     id: `https://${strHost}/u/${strName}/followers`,
     type: "OrderedCollection",
     totalItems: 0,
   };
-  return c.json(r, 200, {
-    "Content-Type": "application/activity+json",
-    "Access-Control-Allow-Origin": "*",
-    "Cache-Control": `public, max-age=${CONFIG.maxAge}, must-revalidate`,
-    "Vary": "Accept, Accept-Encoding",
-  });
+  return c.json(body, 200, { "Content-Type": "application/activity+json" });
 });
 
 app.post("/s/:strSecret/u/:strName", async (c) => {
@@ -548,12 +589,12 @@ app.post("/s/:strSecret/u/:strName", async (c) => {
   if (!c.req.param("strSecret") || c.req.param("strSecret") === "-") return c.notFound();
   if (c.req.param("strSecret") !== ENV.SECRET) return c.notFound();
   if (!c.req.query("id") || !c.req.query("type")) return c.body(null, 400);
-  if (new URL(c.req.query("id") || "").protocol !== "https:") return c.body(null, 400);
-  const x = await getActivity(c.req.query("id") || "", strHost);
+  if (new URL(c.req.query("id") || "about:blank").protocol !== "https:") return c.body(null, 400);
+  const x = await getActivity(strName, strHost, c.req.query("id") || "");
   if (!x) return c.body(null, 500);
   const t = c.req.query("type");
   if (t === "type") {
-    console.log(x.type);
+    console.log(`TYPE ${x.id} ${x.type}`);
     return c.body(null);
   }
   if (t === "follow") {
@@ -565,53 +606,58 @@ app.post("/s/:strSecret/u/:strName", async (c) => {
     return c.body(null);
   }
   if (t === "like") {
-    const y = await getActivity(x.attributedTo, strHost);
+    if (new URL(x.attributedTo || "about:blank").protocol !== "https:") return c.body(null, 400);
+    const y = await getActivity(strName, strHost, x.attributedTo);
     if (!y) return c.body(null, 500);
     await like(strName, strHost, x, y);
     return c.body(null);
   }
   if (t === "undo_like") {
-    const y = await getActivity(x.attributedTo, strHost);
+    if (new URL(x.attributedTo || "about:blank").protocol !== "https:") return c.body(null, 400);
+    const y = await getActivity(strName, strHost, x.attributedTo);
     if (!y) return c.body(null, 500);
     await undoLike(strName, strHost, x, y);
     return c.body(null);
   }
   if (t === "announce") {
-    const y = await getActivity(x.attributedTo, strHost);
+    if (new URL(x.attributedTo || "about:blank").protocol !== "https:") return c.body(null, 400);
+    const y = await getActivity(strName, strHost, x.attributedTo);
     if (!y) return c.body(null, 500);
     await announce(strName, strHost, x, y);
     return c.body(null);
   }
   if (t === "undo_announce") {
-    const y = await getActivity(x.attributedTo, strHost);
+    if (new URL(x.attributedTo || "about:blank").protocol !== "https:") return c.body(null, 400);
+    const y = await getActivity(strName, strHost, x.attributedTo);
     if (!y) return c.body(null, 500);
     await undoAnnounce(strName, strHost, x, y);
     return c.body(null);
   }
   if (t === "create_note") {
     const y = c.req.query("url") || "";
-    if (new URL(y).protocol !== "https:") return c.body(null, 400);
+    if (new URL(y || "about:blank").protocol !== "https:") return c.body(null, 400);
     await createNote(strName, strHost, x, y);
     return c.body(null);
   }
   if (t === "create_note_mention") {
-    const y = await getActivity(x.attributedTo, strHost);
+    if (new URL(x.attributedTo || "about:blank").protocol !== "https:") return c.body(null, 400);
+    const y = await getActivity(strName, strHost, x.attributedTo);
     if (!y) return c.body(null, 500);
     const z = c.req.query("url") || "";
-    if (new URL(z).protocol !== "https:") return c.body(null, 400);
+    if (new URL(z || "about:blank").protocol !== "https:") return c.body(null, 400);
     await createNoteMention(strName, strHost, x, y, z);
     return c.body(null);
   }
   if (t === "create_note_hashtag") {
     const y = c.req.query("url") || "";
-    if (new URL(y).protocol !== "https:") return c.body(null, 400);
+    if (new URL(y || "about:blank").protocol !== "https:") return c.body(null, 400);
     const z = c.req.query("tag") || "";
     await createNoteHashtag(strName, strHost, x, y, z);
     return c.body(null);
   }
   if (t === "delete_note") {
     const y = c.req.query("url") || "";
-    if (new URL(y).protocol !== "https:") return c.body(null, 400);
+    if (new URL(y || "about:blank").protocol !== "https:") return c.body(null, 400);
     await deleteNote(strName, strHost, x, y);
     return c.body(null);
   }
@@ -620,24 +666,19 @@ app.post("/s/:strSecret/u/:strName", async (c) => {
 
 app.get("/.well-known/nodeinfo", (c) => {
   const strHost = new URL(CONFIG.origin).hostname;
-  const r = {
+  const body = {
     links: [
       {
-        href: `https://${strHost}/nodeinfo/2.0.json`,
         rel: "http://nodeinfo.diaspora.software/ns/schema/2.0",
+        href: `https://${strHost}/nodeinfo/2.0.json`,
       },
       {
-        href: `https://${strHost}/nodeinfo/2.1.json`,
         rel: "http://nodeinfo.diaspora.software/ns/schema/2.1",
+        href: `https://${strHost}/nodeinfo/2.1.json`,
       },
     ],
   };
-  return c.json(r, 200, {
-    "Content-Type": "application/json",
-    "Access-Control-Allow-Origin": "*",
-    "Cache-Control": `public, max-age=${CONFIG.maxAge}, must-revalidate`,
-    "Vary": "Accept, Accept-Encoding",
-  });
+  return c.json(body);
 });
 
 app.get("/.well-known/webfinger", (c) => {
@@ -652,7 +693,7 @@ app.get("/.well-known/webfinger", (c) => {
   if (strResource === `https://${strHost}/user/${strName}`) boolResource = true;
   if (strResource === `https://${strHost}/users/${strName}`) boolResource = true;
   if (!boolResource) return c.notFound();
-  const r = {
+  const body = {
     subject: `acct:${strName}@${strHost}`,
     aliases: [
       `mailto:${strName}@${strHost}`,
@@ -669,7 +710,7 @@ app.get("/.well-known/webfinger", (c) => {
       },
       {
         rel: "http://webfinger.net/rel/avatar",
-        type: "text/png",
+        type: "image/png",
         href: `https://${strHost}/public/${strName}u.png`,
       },
       {
@@ -679,12 +720,7 @@ app.get("/.well-known/webfinger", (c) => {
       },
     ],
   };
-  return c.json(r, 200, {
-    "Content-Type": "application/jrd+json",
-    "Access-Control-Allow-Origin": "*",
-    "Cache-Control": `public, max-age=${CONFIG.maxAge}, must-revalidate`,
-    "Vary": "Accept, Accept-Encoding",
-  });
+  return c.json(body, 200, { "Content-Type": "application/jrd+json" });
 });
 
 app.get("/s", (c) => c.notFound());
@@ -700,7 +736,7 @@ app.get("/:strRoot", (c) => {
   return c.redirect(`/u/${c.req.param("strRoot").slice(1)}`);
 });
 
-serve(app.fetch, {
+Deno.serve({
   hostname: ENV.HOSTS || "localhost",
   port: Number(ENV.PORT) || 8080,
-});
+}, app.fetch);

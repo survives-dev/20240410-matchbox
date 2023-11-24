@@ -1,5 +1,8 @@
+.git
+
 node_modules
 vendor
+bun.lockb
 
 tmp
 
@@ -11,7 +14,10 @@ id_ed25519.pub
 id_rsa
 id_rsa.pub
 secret.txt
+ssl-cert-snakeoil.key
+ssl-cert-snakeoil.pem
 
 .env.example
-env.sh
+install.sh
+setup.sh
 fly.toml
