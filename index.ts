@@ -1,9 +1,11 @@
-import "dotenv/load";
 import { Hono } from "hono";
 import { serveStatic } from "hono/deno";
 import { basicAuth, cache, compress, cors, etag } from "hono/middleware";
 
 const ENV = {
+  TLS_CA_CERT: Deno.env.get("TLS_CA_CERT"),
+  TLS_CERT: Deno.env.get("TLS_CERT"),
+  TLS_KEY: Deno.env.get("TLS_KEY"),
   HOSTS: Deno.env.get("HOSTS"),
   PORT: Deno.env.get("PORT"),
   CONFIG_JSON: Deno.env.get("CONFIG_JSON"),
@@ -14,11 +16,36 @@ const ENV = {
   PRIVATE_KEY: Deno.env.get("PRIVATE_KEY"),
 } as { [key: string]: string };
 
+let tlsCaCertPem, tlsCertPem, tlsKeyPem;
+if (ENV.TLS_CA_CERT) {
+  tlsCaCertPem = ENV.TLS_CA_CERT.split("\\n").join("\n");
+  if (tlsCaCertPem.startsWith('"')) tlsCaCertPem = tlsCaCertPem.slice(1);
+  if (tlsCaCertPem.endsWith('"')) tlsCaCertPem = tlsCaCertPem.slice(0, -1);
+}
+if (ENV.TLS_CERT) {
+  tlsCertPem = ENV.TLS_CERT.split("\\n").join("\n");
+  if (tlsCertPem.startsWith('"')) tlsCertPem = tlsCertPem.slice(1);
+  if (tlsCertPem.endsWith('"')) tlsCertPem = tlsCertPem.slice(0, -1);
+}
+if (ENV.TLS_KEY) {
+  tlsKeyPem = ENV.TLS_KEY.split("\\n").join("\n");
+  if (tlsKeyPem.startsWith('"')) tlsKeyPem = tlsKeyPem.slice(1);
+  if (tlsKeyPem.endsWith('"')) tlsKeyPem = tlsKeyPem.slice(0, -1);
+}
+const client = Deno.createHttpClient({ caCerts: [String(tlsCaCertPem || tlsCertPem)] });
+
 const PRIVATE_KEY = await importPrivateKey(ENV.PRIVATE_KEY);
 const PUBLIC_KEY = await privateKeyToPublicKey(PRIVATE_KEY);
 const publicKeyPem = await exportPublicKey(PUBLIC_KEY);
 const publicKeyJwk = await crypto.subtle.exportKey("jwk", PUBLIC_KEY);
-const configJsonFile = ENV.CONFIG_JSON || await Deno.readTextFile("data/config.json");
+let configJsonFile;
+if (ENV.CONFIG_JSON) {
+  configJsonFile = ENV.CONFIG_JSON;
+  if (configJsonFile.startsWith("'")) configJsonFile = configJsonFile.slice(1);
+  if (configJsonFile.endsWith("'")) configJsonFile = configJsonFile.slice(0, -1);
+} else {
+  configJsonFile = await Deno.readTextFile("data/config.json");
+}
 const CONFIG = JSON.parse(configJsonFile);
 
 const app = new Hono();
@@ -35,7 +62,11 @@ if (CONFIG.maxAge === 0) {
     await next();
     c.res.headers.append("Cache-Control", "public, max-age=0, must-revalidate");
   });
-  app.use("/.well-known/*", async (c, next) => {
+  app.use("/.well-known/nodeinfo", async (c, next) => {
+    await next();
+    c.res.headers.append("Cache-Control", "public, max-age=0, must-revalidate");
+  });
+  app.use("/.well-known/webfinger", async (c, next) => {
     await next();
     c.res.headers.append("Cache-Control", "public, max-age=0, must-revalidate");
   });
@@ -57,7 +88,15 @@ if (CONFIG.maxAge === 0) {
     }),
   );
   app.use(
-    "/.well-known/*",
+    "/.well-known/nodeinfo",
+    cache({
+      cacheName: "matchbox",
+      cacheControl: `public, max-age=${Number(CONFIG.maxAge) || 0}, must-revalidate`,
+      wait: true,
+    }),
+  );
+  app.use(
+    "/.well-known/webfinger",
     cache({
       cacheName: "matchbox",
       cacheControl: `public, max-age=${Number(CONFIG.maxAge) || 0}, must-revalidate`,
@@ -67,12 +106,13 @@ if (CONFIG.maxAge === 0) {
 }
 app.use("/", compress(), cors());
 app.use("/u/:param", compress(), cors());
-app.use("/.well-known/*", compress(), cors());
+app.use("/.well-known/nodeinfo", compress(), cors());
+app.use("/.well-known/webfinger", compress(), cors());
 app.use("/public/*", etag(), serveStatic({ root: "./public/" }));
-app.use("/nodeinfo/*", cors(), etag(), serveStatic({ root: "./public/" }));
+app.use("/nodeinfo/*", etag(), serveStatic({ root: "./public/" }));
 app.use("/favicon.ico", etag(), serveStatic({ path: "./public/favicon.ico" }));
-app.use("/humans.txt", cors(), etag(), serveStatic({ path: "./public/humans.txt" }));
-app.use("/robots.txt", cors(), etag(), serveStatic({ path: "./public/robots.txt" }));
+app.use("/humans.txt", etag(), serveStatic({ path: "./public/humans.txt" }));
+app.use("/robots.txt", etag(), serveStatic({ path: "./public/robots.txt" }));
 app.use("/s/:param/u/:param", async (c, next) => {
   if (ENV.ENABLE_BASIC_AUTH === "true" && c.req.method === "POST") {
     const auth = basicAuth({
@@ -188,9 +228,9 @@ async function getActivity(strName: string, strHost: string, req: string) {
     Accept: "application/activity+json",
     "Accept-Encoding": "identity",
     "Cache-Control": "no-cache",
-    "User-Agent": `Matchbox/0.6.0 (+https://${strHost}/)`,
+    "User-Agent": `Matchbox/0.7.0 (+https://${strHost}/)`,
   };
-  const res = await fetch(req, { method: "GET", headers });
+  const res = await fetch(req, { method: "GET", headers, client });
   console.log(`GET ${req} ${res.status}`);
   return res.json();
 }
@@ -227,10 +267,10 @@ async function postActivity(strName: string, strHost: string, req: string, x: { 
     "Accept-Encoding": "gzip",
     "Cache-Control": "max-age=0",
     "Content-Type": "application/activity+json",
-    "User-Agent": `Matchbox/0.6.0 (+https://${strHost}/)`,
+    "User-Agent": `Matchbox/0.7.0 (+https://${strHost}/)`,
   };
   console.log(`POST ${req} ${body}`);
-  await fetch(req, { method: "POST", body, headers });
+  await fetch(req, { method: "POST", body, headers, client });
 }
 
 async function acceptFollow(strName: string, strHost: string, x: { [key: string]: any }, y: { [key: string]: any }) {
@@ -457,10 +497,13 @@ app.get("/", (c) => c.text("Matchbox: ActivityPub@Hono"));
 app.get("/u/:strName", (c) => {
   const strName = c.req.param("strName");
   const strHost = new URL(CONFIG.origin).hostname;
-  if (strName !== CONFIG.preferredUsername) return c.notFound();
-  if (!c.req.header("Accept")?.includes("application/activity+json")) {
-    return c.text(`${strName}: ${CONFIG.name}`);
-  }
+  const strAccept = c.req.header("Accept");
+  let boolAccept = false;
+  if (strAccept?.includes("application/activity+json")) boolAccept = true;
+  if (strAccept?.includes("application/ld+json")) boolAccept = true;
+  if (strAccept?.includes('application/ld+json; profile="https://www.w3.org/ns/activitystreams"')) boolAccept = true;
+  if (strAccept?.includes("application/json")) boolAccept = true;
+  if (!boolAccept) return c.text(`${strName}: ${CONFIG.name}`);
   const body = {
     "@context": [
       "https://www.w3.org/ns/activitystreams",
@@ -475,8 +518,11 @@ app.get("/u/:strName", (c) => {
     followers: `https://${strHost}/u/${strName}/followers`,
     preferredUsername: strName,
     name: CONFIG.name,
-    summary: "<p>0.6.0</p>",
+    summary: "<p>0.7.0</p>",
     url: `https://${strHost}/u/${strName}`,
+    endpoints: {
+      sharedInbox: `https://${strHost}/u/${strName}/inbox`,
+    },
     publicKey: {
       id: `https://${strHost}/u/${strName}#Key`,
       type: "Key",
@@ -507,15 +553,17 @@ app.get("/u/:strName/inbox", (c) => c.body(null, 405));
 app.post("/u/:strName/inbox", async (c) => {
   const strName = c.req.param("strName");
   const strHost = new URL(CONFIG.origin).hostname;
-  const y = await c.req.json();
-  const t = c.req.header("Content-Type");
+  const strContentType = c.req.header("Content-Type");
   let boolContentType = false;
+  const y = await c.req.json();
   console.log(`INBOX ${y.id} ${y.type}`);
   if (strName !== CONFIG.preferredUsername) return c.notFound();
-  if (t?.includes("application/activity+json")) boolContentType = true;
-  if (t?.includes("application/ld+json")) boolContentType = true;
-  if (t?.includes('application/ld+json; profile="https://www.w3.org/ns/activitystreams"')) boolContentType = true;
-  if (t?.includes("application/json")) boolContentType = true;
+  if (strContentType?.includes("application/activity+json")) boolContentType = true;
+  if (strContentType?.includes("application/ld+json")) boolContentType = true;
+  if (strContentType?.includes('application/ld+json; profile="https://www.w3.org/ns/activitystreams"')) {
+    boolContentType = true;
+  }
+  if (strContentType?.includes("application/json")) boolContentType = true;
   if (!boolContentType) return c.body(null, 400);
   if (!c.req.header("Digest") || !c.req.header("Signature")) return c.body(null, 400);
   if (new URL(y.actor || "about:blank").protocol !== "https:") return c.body(null, 400);
@@ -544,7 +592,6 @@ app.get("/u/:strName/outbox", (c) => {
   const strName = c.req.param("strName");
   const strHost = new URL(CONFIG.origin).hostname;
   if (strName !== CONFIG.preferredUsername) return c.notFound();
-  if (!c.req.header("Accept")?.includes("application/activity+json")) return c.body(null, 400);
   const body = {
     "@context": "https://www.w3.org/ns/activitystreams",
     id: `https://${strHost}/u/${strName}/outbox`,
@@ -558,7 +605,6 @@ app.get("/u/:strName/following", (c) => {
   const strName = c.req.param("strName");
   const strHost = new URL(CONFIG.origin).hostname;
   if (strName !== CONFIG.preferredUsername) return c.notFound();
-  if (!c.req.header("Accept")?.includes("application/activity+json")) return c.body(null, 400);
   const body = {
     "@context": "https://www.w3.org/ns/activitystreams",
     id: `https://${strHost}/u/${strName}/following`,
@@ -572,7 +618,6 @@ app.get("/u/:strName/followers", (c) => {
   const strName = c.req.param("strName");
   const strHost = new URL(CONFIG.origin).hostname;
   if (strName !== CONFIG.preferredUsername) return c.notFound();
-  if (!c.req.header("Accept")?.includes("application/activity+json")) return c.body(null, 400);
   const body = {
     "@context": "https://www.w3.org/ns/activitystreams",
     id: `https://${strHost}/u/${strName}/followers`,
@@ -739,4 +784,6 @@ app.get("/:strRoot", (c) => {
 Deno.serve({
   hostname: ENV.HOSTS || "localhost",
   port: Number(ENV.PORT) || 8080,
+  cert: tlsCertPem,
+  key: tlsKeyPem,
 }, app.fetch);

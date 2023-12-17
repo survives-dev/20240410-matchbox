@@ -8,3 +8,5 @@ services:
       - ${PORT:-8080}:${PORT:-8080}
     env_file:
       - .env
+    environment:
+      - PORT
