@@ -47,6 +47,11 @@ if (ENV.CONFIG_JSON) {
   configJsonFile = await Deno.readTextFile("data/config.json");
 }
 const CONFIG = JSON.parse(configJsonFile);
+const ME = [
+  `<a href="https://${new URL(CONFIG.me).hostname}/" rel="me nofollow noopener noreferrer" target="_blank">`,
+  `https://${new URL(CONFIG.me).hostname}/`,
+  "</a>",
+].join("");
 
 const app = new Hono();
 app.use("*", async (c, next) => {
@@ -183,12 +188,13 @@ async function privateKeyToPublicKey(key: CryptoKey) {
 async function exportPublicKey(key: CryptoKey) {
   const der = await crypto.subtle.exportKey("spki", key);
   let b64 = btoa(btos(der));
-  let pem = "-----BEGIN PUBLIC KEY-----\n";
-  while (b64.length > 0) {
+  let pem = "-----BEGIN PUBLIC KEY-----" + "\n";
+  while (b64.length > 64) {
     pem += b64.substring(0, 64) + "\n";
     b64 = b64.substring(64);
   }
-  pem += "-----END PUBLIC KEY-----\n";
+  pem += b64.substring(0, b64.length) + "\n";
+  pem += "-----END PUBLIC KEY-----" + "\n";
   return pem;
 }
 
@@ -228,11 +234,12 @@ async function getActivity(strName: string, strHost: string, req: string) {
     Accept: "application/activity+json",
     "Accept-Encoding": "identity",
     "Cache-Control": "no-cache",
-    "User-Agent": `Matchbox/0.7.0 (+https://${strHost}/)`,
+    "User-Agent": `Matchbox/0.8.0 (+https://${strHost}/)`,
   };
   const res = await fetch(req, { method: "GET", headers, client });
+  const body = await res.json();
   console.log(`GET ${req} ${res.status}`);
-  return res.json();
+  return body;
 }
 
 async function postActivity(strName: string, strHost: string, req: string, x: { [key: string]: any }) {
@@ -267,7 +274,7 @@ async function postActivity(strName: string, strHost: string, req: string, x: { 
     "Accept-Encoding": "gzip",
     "Cache-Control": "max-age=0",
     "Content-Type": "application/activity+json",
-    "User-Agent": `Matchbox/0.7.0 (+https://${strHost}/)`,
+    "User-Agent": `Matchbox/0.8.0 (+https://${strHost}/)`,
   };
   console.log(`POST ${req} ${body}`);
   await fetch(req, { method: "POST", body, headers, client });
@@ -507,8 +514,15 @@ app.get("/u/:strName", (c) => {
   const body = {
     "@context": [
       "https://www.w3.org/ns/activitystreams",
+      "https://www.w3.org/ns/did/v1",
       "https://w3id.org/security/v1",
-      "https://w3id.org/security",
+      "https://w3id.org/security/jwk/v1",
+      {
+        schema: "https://schema.org/",
+        PropertyValue: "schema:PropertyValue",
+        value: "schema:value",
+        Key: "sec:Key",
+      },
     ],
     id: `https://${strHost}/u/${strName}`,
     type: "Person",
@@ -518,22 +532,13 @@ app.get("/u/:strName", (c) => {
     followers: `https://${strHost}/u/${strName}/followers`,
     preferredUsername: strName,
     name: CONFIG.name,
-    summary: "<p>0.7.0</p>",
+    summary: "<p>0.8.0</p>",
     url: `https://${strHost}/u/${strName}`,
-    endpoints: {
-      sharedInbox: `https://${strHost}/u/${strName}/inbox`,
-    },
-    publicKey: {
-      id: `https://${strHost}/u/${strName}#Key`,
-      type: "Key",
-      owner: `https://${strHost}/u/${strName}`,
-      publicKeyPem,
-    },
-    verificationMethod: [{
-      id: `https://${strHost}/u/${strName}#Key`,
-      type: "JsonWebKey",
-      controller: `https://${strHost}/u/${strName}`,
-      publicKeyJwk,
+    endpoints: { sharedInbox: `https://${strHost}/u/${strName}/inbox` },
+    attachment: [{
+      type: "PropertyValue",
+      name: "me",
+      value: ME,
     }],
     icon: {
       type: "Image",
@@ -545,6 +550,18 @@ app.get("/u/:strName", (c) => {
       mediaType: "image/png",
       url: `https://${strHost}/public/${strName}s.png`,
     },
+    publicKey: {
+      id: `https://${strHost}/u/${strName}#Key`,
+      type: "Key",
+      owner: `https://${strHost}/u/${strName}`,
+      publicKeyPem,
+    },
+    verificationMethod: [{
+      id: `https://${strHost}/u/${strName}#JsonWebKey`,
+      type: "JsonWebKey",
+      controller: `https://${strHost}/u/${strName}`,
+      publicKeyJwk,
+    }],
   };
   return c.json(body, 200, { "Content-Type": "application/activity+json" });
 });
@@ -569,21 +586,21 @@ app.post("/u/:strName/inbox", async (c) => {
   if (new URL(y.actor || "about:blank").protocol !== "https:") return c.body(null, 400);
   const x = await getActivity(strName, strHost, y.actor);
   if (!x) return c.body(null, 500);
+  if (y.type === "Accept" || y.type === "Reject" || y.type === "Add") return c.body(null);
+  if (y.type === "Remove" || y.type === "Like" || y.type === "Announce") return c.body(null);
+  if (y.type === "Create" || y.type === "Update" || y.type === "Delete") return c.body(null);
   if (y.type === "Follow") {
     await acceptFollow(strName, strHost, x, y);
     return c.body(null);
   }
   if (y.type === "Undo") {
     const z = y.object;
+    if (z.type === "Accept" || z.type === "Like" || z.type === "Announce") return c.body(null);
     if (z.type === "Follow") {
       await acceptFollow(strName, strHost, x, z);
       return c.body(null);
     }
-    if (z.type === "Accept" || z.type === "Like" || z.type === "Announce") return c.body(null);
   }
-  if (y.type === "Accept" || y.type === "Reject" || y.type === "Add") return c.body(null);
-  if (y.type === "Remove" || y.type === "Like" || y.type === "Announce") return c.body(null);
-  if (y.type === "Create" || y.type === "Update" || y.type === "Delete") return c.body(null);
   return c.body(null, 500);
 });
 
