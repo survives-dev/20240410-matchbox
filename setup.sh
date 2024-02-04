@@ -22,7 +22,7 @@ echo "$(tr -dc a-zA-Z0-9 </dev/urandom | head -c48)" >> secret.txt
 echo "SECRET=$(tail -1 secret.txt)" > .env
 if command -v openssl >/dev/null; then
   if [ ! -f id_rsa ]; then
-    openssl genpkey -algorithm rsa -pkeyopt rsa_keygen_bits:4096 -out id_rsa
+    openssl genpkey -quiet -algorithm rsa -pkeyopt rsa_keygen_bits:4096 -out id_rsa
   fi
   if [ ! -f id_rsa.pub ]; then
     openssl rsa -pubout -in id_rsa -out id_rsa.pub 2>/dev/null
