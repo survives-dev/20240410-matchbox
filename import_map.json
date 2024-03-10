@@ -1,8 +1,8 @@
 {
   "imports": {
-    "hono": "https://deno.land/x/hono@v3.12.10/mod.ts",
-    "hono/deno": "https://deno.land/x/hono@v3.12.10/adapter/deno/index.ts",
-    "hono/middleware": "https://deno.land/x/hono@v3.12.10/middleware.ts",
-    "testing/asserts": "https://deno.land/std@0.214.0/assert/mod.ts"
+    "hono": "https://deno.land/x/hono@v4.0.10/mod.ts",
+    "hono/deno": "https://deno.land/x/hono@v4.0.10/adapter/deno/index.ts",
+    "hono/middleware": "https://deno.land/x/hono@v4.0.10/middleware.ts",
+    "testing/asserts": "https://deno.land/std@0.219.0/assert/mod.ts"
   }
 }

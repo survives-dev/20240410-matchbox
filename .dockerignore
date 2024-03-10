@@ -18,6 +18,8 @@ ssl-cert-snakeoil.key
 ssl-cert-snakeoil.pem
 
 .env.example
+index_bench.ts
+index_test.ts
 install.sh
 setup.sh
 fly.toml

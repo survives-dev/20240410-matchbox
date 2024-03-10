@@ -1,5 +1,9 @@
 {
-  "version": "2.1",
+  "version": "2.2",
+  "instance": {
+    "name": "Matchbox",
+    "description": "ActivityPub@Hono"
+  },
   "software": {
     "name": "matchbox",
     "version": "0.9.0",
@@ -18,14 +22,13 @@
     "users": {
       "total": 0,
       "activeHalfyear": 0,
-      "activeMonth": 0
+      "activeMonth": 0,
+      "activeWeek": 0
     },
     "localPosts": 0,
     "localComments": 0
   },
   "metadata": {
-    "nodeName": "Matchbox",
-    "nodeDescription": "ActivityPub@Hono",
     "themeColor": "#800000"
   }
 }

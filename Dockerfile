@@ -1,11 +1,11 @@
-FROM denoland/deno:1.40.3 as builder
+FROM denoland/deno:1.41.2 as builder
 
 WORKDIR /app
 COPY . .
 
 RUN deno cache index.ts
 
-FROM denoland/deno:distroless-1.40.3
+FROM denoland/deno:distroless-1.41.2
 
 WORKDIR /app
 COPY --from=builder /app .
