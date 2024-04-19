@@ -18,11 +18,11 @@ elif [ $# -gt 0 ]; then
   cat data/config.json.example | sed "s|https://example|$1|g" | sed 's|86400|null|g' > data/config.json
 fi
 
-echo "$(tr -dc a-zA-Z0-9 </dev/urandom | head -c48)" >> secret.txt
+echo "$(LC_CTYPE=C tr -dc a-zA-Z0-9 </dev/urandom | head -c48)" >> secret.txt
 echo "SECRET=$(tail -1 secret.txt)" > .env
 if command -v openssl >/dev/null; then
   if [ ! -f id_rsa ]; then
-    openssl genpkey -quiet -algorithm rsa -pkeyopt rsa_keygen_bits:4096 -out id_rsa
+    openssl genpkey -algorithm rsa -pkeyopt rsa_keygen_bits:4096 -out id_rsa
   fi
   if [ ! -f id_rsa.pub ]; then
     openssl rsa -pubout -in id_rsa -out id_rsa.pub 2>/dev/null
@@ -37,4 +37,4 @@ elif command -v ssh-keygen >/dev/null; then
 else
   touch id_rsa id_rsa.pub
 fi
-echo "PRIVATE_KEY=\"$(cat id_rsa | sed -z 's/\n/\\n/g')\"" >> .env
+echo "PRIVATE_KEY=\"$(cat id_rsa | tr '\n' '\r')\"" >> .env
