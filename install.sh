@@ -23,7 +23,7 @@ elif [ $# -gt 0 ]; then
   cat data/config.json.example | sed "s|https://example|$1|g" | sed 's|86400|null|g' > data/config.json
 fi
 
-echo "$(tr -dc a-zA-Z0-9 </dev/urandom | head -c48)" >> secret.txt
+echo "$(LC_CTYPE=C tr -dc a-zA-Z0-9 </dev/urandom | head -c48)" >> secret.txt
 echo "SECRET=$(tail -1 secret.txt)" > .env
 if command -v openssl >/dev/null; then
   if [ ! -f id_rsa ]; then
@@ -42,7 +42,7 @@ elif command -v ssh-keygen >/dev/null; then
 else
   touch id_rsa id_rsa.pub
 fi
-echo "PRIVATE_KEY=\"$(cat id_rsa | sed -z 's/\n/\\n/g')\"" >> .env
+echo "PRIVATE_KEY=\"$(cat id_rsa | tr '\n' '\r')\"" >> .env
 
 docker run --init -d -v "$PWD/data:/app/data" -p "${PORT:-8080}:${PORT:-8080}" -e PORT --env-file=.env --name=matchbox matchbox
 cd ..
